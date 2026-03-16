@@ -40,6 +40,7 @@ Desktop startup order:
 - Workflow: `.github/workflows/electron-release.yml`
 - Release trigger: push git tag `v*` (for example `v1.0.1`) or run workflow manually.
 - Build command in CI: `npm run release` (electron-builder publish).
+- Local build command: `npm run dist:win` (artifacts are written to timestamped folders in `release/`).
 
 Open multiple tabs (or devices) and join the same server.
 For screen audio in Chrome/Edge, enable the browser checkbox like `Share tab audio` / `Share system audio` when starting screen share.

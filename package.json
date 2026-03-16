@@ -8,9 +8,9 @@
     "start:electron": "node scripts/run-electron.js",
     "start:web": "powershell -ExecutionPolicy Bypass -File scripts/start.ps1",
     "start:web:raw": "node server.js",
-    "dist": "electron-builder --publish never",
-    "dist:win": "electron-builder --win --publish never",
-    "release": "electron-builder --win --publish always",
+    "dist": "node scripts/build-electron.js --publish never",
+    "dist:win": "node scripts/build-electron.js --win --publish never",
+    "release": "node scripts/build-electron.js --win --publish always",
     "check:stun": "node scripts/check-stun-gist.js",
     "cert:issue:le": "powershell -ExecutionPolicy Bypass -File scripts/issue-letsencrypt.ps1",
     "cert:renew:le": "powershell -ExecutionPolicy Bypass -File scripts/renew-letsencrypt.ps1"

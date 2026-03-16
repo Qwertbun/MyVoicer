@@ -2,11 +2,15 @@
 
 const path = require("path");
 const net = require("net");
+const fs = require("fs");
 const { app, BrowserWindow, ipcMain, shell } = require("electron");
 
 const DEFAULT_PORT = Number(process.env.ELECTRON_INTERNAL_PORT || 3000);
 const UPDATE_CHECK_TIMEOUT_MS = Number(process.env.UPDATE_CHECK_TIMEOUT_MS || 12000);
 const SPLASH_MIN_VISIBLE_MS = Number(process.env.SPLASH_MIN_VISIBLE_MS || 2200);
+const MAIN_PAGE_LOAD_RETRIES = Number(process.env.MAIN_PAGE_LOAD_RETRIES || 3);
+const MAIN_PAGE_LOAD_TIMEOUT_MS = Number(process.env.MAIN_PAGE_LOAD_TIMEOUT_MS || 14000);
+const MAIN_PAGE_RETRY_DELAY_MS = Number(process.env.MAIN_PAGE_RETRY_DELAY_MS || 700);
 
 let splashWindow = null;
 let mainWindow = null;
@@ -14,6 +18,35 @@ let backendUrl = "";
 let shutdownInProgress = false;
 let startServer = null;
 let stopServer = null;
+
+function ensureDirectorySafe(dirPath) {
+  fs.mkdirSync(dirPath, { recursive: true });
+}
+
+function configureElectronStoragePaths() {
+  const preferredUserData = process.env.ELECTRON_USER_DATA_DIR
+    ? path.resolve(process.env.ELECTRON_USER_DATA_DIR)
+    : path.join(app.getPath("appData"), "qwerbentum");
+
+  let resolvedUserData = preferredUserData;
+  try {
+    ensureDirectorySafe(preferredUserData);
+    app.setPath("userData", preferredUserData);
+  } catch (error) {
+    resolvedUserData = path.join(app.getPath("temp"), "qwerbentum-user-data");
+    ensureDirectorySafe(resolvedUserData);
+    app.setPath("userData", resolvedUserData);
+    console.warn(
+      `[storage] fallback userData path used: ${error && error.message ? error.message : String(error)}`
+    );
+  }
+
+  const sessionDataPath = path.join(resolvedUserData, "session");
+  ensureDirectorySafe(sessionDataPath);
+  app.setPath("sessionData", sessionDataPath);
+}
+
+configureElectronStoragePaths();
 
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 if (!gotSingleInstanceLock) {
@@ -175,6 +208,99 @@ function revealMainWindow() {
   }
 }
 
+function buildLoadErrorPage(error, targetUrl) {
+  const safeUrl = String(targetUrl || "").replace(/</g, "&lt;");
+  const safeError = String(error && error.message ? error.message : error || "Unknown error").replace(
+    /</g,
+    "&lt;"
+  );
+
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>qwerbentum startup error</title>
+    <style>
+      body { margin: 0; font-family: Segoe UI, Arial, sans-serif; background: #0a0f1a; color: #d6e6ff; display: grid; place-items: center; min-height: 100vh; }
+      .card { max-width: 720px; margin: 24px; padding: 24px; border: 1px solid #24457a; border-radius: 12px; background: #11192a; }
+      h1 { margin-top: 0; font-size: 24px; }
+      p { line-height: 1.5; }
+      code { background: #0b1324; padding: 2px 6px; border-radius: 6px; color: #9fd3ff; }
+    </style>
+  </head>
+  <body>
+    <section class="card">
+      <h1>Failed to open main page</h1>
+      <p>Target URL: <code>${safeUrl}</code></p>
+      <p>Error: <code>${safeError}</code></p>
+      <p>Restart the app. If it repeats, check firewall/antivirus restrictions for localhost.</p>
+    </section>
+  </body>
+</html>`;
+}
+
+function waitForNavigationResult(targetWindow, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    let done = false;
+
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error(`Navigation timeout after ${timeoutMs}ms`));
+    }, timeoutMs);
+
+    const onFinish = () => {
+      cleanup();
+      resolve();
+    };
+
+    const onFail = (_, errorCode, errorDescription, validatedURL, isMainFrame) => {
+      if (!isMainFrame) {
+        return;
+      }
+      cleanup();
+      reject(new Error(`Navigation failed (${errorCode}) ${errorDescription} at ${validatedURL}`));
+    };
+
+    const cleanup = () => {
+      if (done) {
+        return;
+      }
+      done = true;
+      clearTimeout(timer);
+      targetWindow.webContents.removeListener("did-finish-load", onFinish);
+      targetWindow.webContents.removeListener("did-fail-load", onFail);
+    };
+
+    targetWindow.webContents.once("did-finish-load", onFinish);
+    targetWindow.webContents.once("did-fail-load", onFail);
+  });
+}
+
+async function loadMainPageWithRetries(targetWindow, targetUrl) {
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= MAIN_PAGE_LOAD_RETRIES; attempt += 1) {
+    try {
+      const navigation = waitForNavigationResult(targetWindow, MAIN_PAGE_LOAD_TIMEOUT_MS);
+      await targetWindow.loadURL(targetUrl);
+      await navigation;
+      return;
+    } catch (error) {
+      lastError = error;
+      console.warn(
+        `[main] load attempt ${attempt}/${MAIN_PAGE_LOAD_RETRIES} failed: ${
+          error && error.message ? error.message : String(error)
+        }`
+      );
+      if (attempt < MAIN_PAGE_LOAD_RETRIES) {
+        await wait(MAIN_PAGE_RETRY_DELAY_MS * attempt);
+      }
+    }
+  }
+
+  throw lastError || new Error("Main page load failed");
+}
+
 async function launchMainFlow() {
   await checkUpdatesFromRepository();
 
@@ -191,18 +317,18 @@ async function launchMainFlow() {
   backendUrl = `http://127.0.0.1:${startedServer.port}`;
 
   createMainWindow();
-  await mainWindow.loadURL(`${backendUrl}/index.html`);
+  const mainPageUrl = `${backendUrl}/index.html`;
+  try {
+    await loadMainPageWithRetries(mainWindow, mainPageUrl);
+  } catch (error) {
+    const errorPageHtml = buildLoadErrorPage(error, mainPageUrl);
+    await mainWindow.loadURL(`data:text/html;charset=UTF-8,${encodeURIComponent(errorPageHtml)}`);
+  }
 
   const splashVisibleMs = Date.now() - splashShownAt;
   const waitMoreMs = Math.max(0, SPLASH_MIN_VISIBLE_MS - splashVisibleMs);
   if (waitMoreMs > 0) {
     await wait(waitMoreMs);
-  }
-
-  if (mainWindow.webContents.isLoading()) {
-    await new Promise((resolve) => {
-      mainWindow.webContents.once("did-finish-load", resolve);
-    });
   }
 
   revealMainWindow();
@@ -228,17 +354,25 @@ ipcMain.handle("app:get-version", () => app.getVersion());
 ipcMain.handle("app:get-backend-url", () => backendUrl);
 
 app.whenReady().then(async () => {
-  await launchMainFlow();
+  try {
+    await launchMainFlow();
+  } catch (error) {
+    console.error(`[main] launch failed: ${error && error.message ? error.message : String(error)}`);
+    if (!mainWindow) {
+      createMainWindow();
+    }
+    const fallbackHtml = buildLoadErrorPage(error, backendUrl || "not-initialized");
+    await mainWindow.loadURL(`data:text/html;charset=UTF-8,${encodeURIComponent(fallbackHtml)}`);
+    revealMainWindow();
+  }
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0 && backendUrl) {
       createMainWindow();
-      mainWindow.loadURL(`${backendUrl}/index.html`).catch((error) => {
+      loadMainPageWithRetries(mainWindow, `${backendUrl}/index.html`).catch((error) => {
         console.error(`[main] failed to re-open window: ${error.message}`);
       });
-      mainWindow.webContents.once("did-finish-load", () => {
-        revealMainWindow();
-      });
+      revealMainWindow();
     }
   });
 });
