@@ -16,6 +16,11 @@ const NETWORK_MODE_ENV_KEY = "NETWORK_MODE";
 const NETWORK_MODE_SERVER = "server";
 const NETWORK_MODE_P2P = "p2p";
 const BOOT_ENV_NETWORK_MODE_RAW = String(process.env[NETWORK_MODE_ENV_KEY] || "").trim();
+const P2P_BOOTSTRAP_ENV_KEYS = [
+  "P2P_BOOTSTRAP",
+  "QWERBENTUM_P2P_BOOTSTRAP",
+  "HYPERSWARM_BOOTSTRAP",
+];
 const REMOTE_BACKEND_ENV_KEYS = [
   "QWERBENTUM_REMOTE_URL",
   "QWERBENTUM_BACKEND_URL",
@@ -80,6 +85,29 @@ function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function parseBootstrapNodes(value) {
+  const raw = String(value || "").trim();
+  if (!raw) {
+    return [];
+  }
+
+  const items = raw
+    .split(/[,\n;\r\t ]+/)
+    .map((item) => String(item || "").trim())
+    .filter(Boolean);
+
+  const unique = new Set();
+  const normalized = [];
+  for (const item of items) {
+    if (!unique.has(item)) {
+      unique.add(item);
+      normalized.push(item);
+    }
+  }
+
+  return normalized;
+}
+
 function normalizeEmbeddedNetworkMode(value) {
   return String(value || "").trim().toLowerCase() === NETWORK_MODE_P2P
     ? NETWORK_MODE_P2P
@@ -135,6 +163,18 @@ function getCliBackendUrlArgument() {
   return "";
 }
 
+function getCliP2PBootstrapArgument() {
+  const args = Array.isArray(process.argv) ? process.argv : [];
+  for (const arg of args) {
+    const text = String(arg || "").trim();
+    if (!text.toLowerCase().startsWith("--p2p-bootstrap=")) {
+      continue;
+    }
+    return text.slice("--p2p-bootstrap=".length).trim();
+  }
+  return "";
+}
+
 function normalizeConfiguredBackendUrl(value) {
   const raw = String(value || "").trim();
   if (!raw) {
@@ -178,6 +218,27 @@ function resolveConfiguredBackendUrl() {
   return "";
 }
 
+function resolveConfiguredP2PBootstrap() {
+  const cliValue = getCliP2PBootstrapArgument();
+  if (cliValue) {
+    return parseBootstrapNodes(cliValue);
+  }
+
+  for (const envKey of P2P_BOOTSTRAP_ENV_KEYS) {
+    const envValue = String(process.env[envKey] || "").trim();
+    if (!envValue) {
+      continue;
+    }
+
+    const nodes = parseBootstrapNodes(envValue);
+    if (nodes.length > 0) {
+      return nodes;
+    }
+  }
+
+  return [];
+}
+
 function resolveEmbeddedNetworkMode() {
   if (hasExplicitEnvironmentNetworkMode()) {
     return normalizeEmbeddedNetworkMode(BOOT_ENV_NETWORK_MODE_RAW);
@@ -210,6 +271,12 @@ function ensureBackendLoaded() {
   process.env.CHAT_STATE_ROOT = path.join(runtimeRoot, "data");
   process.env[NETWORK_MODE_ENV_KEY] = resolveEmbeddedNetworkMode();
   console.log(`[main] embedded network mode: ${process.env[NETWORK_MODE_ENV_KEY]}`);
+
+  const bootstrapNodes = resolveConfiguredP2PBootstrap();
+  if (bootstrapNodes.length > 0) {
+    process.env.P2P_BOOTSTRAP = bootstrapNodes.join(",");
+    console.log(`[main] p2p bootstrap override: ${process.env.P2P_BOOTSTRAP}`);
+  }
 
   const backend = require("../server");
   startServer = backend.startServer;

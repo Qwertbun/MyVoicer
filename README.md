@@ -32,6 +32,9 @@ but replaces central room discovery/history transport with:
 
 Run it with:
 - `npm run start:web:p2p`
+- optional bootstrap override:
+  - PowerShell: `$env:P2P_BOOTSTRAP="88.99.3.86@node1.hyperdht.org:49737,142.93.90.113@node2.hyperdht.org:49737,138.68.147.8@node3.hyperdht.org:49737"`
+  - packaged exe arg: `qwerbentum.exe --p2p-bootstrap=88.99.3.86@node1.hyperdht.org:49737,142.93.90.113@node2.hyperdht.org:49737,138.68.147.8@node3.hyperdht.org:49737`
 
 Current scope of P2P mode:
 - room discovery between independent backend nodes
@@ -42,6 +45,11 @@ Current limitations of P2P mode:
 - file attachments are rejected in P2P mode for now
 - it is still experimental and should be treated as a feature branch
 - media still depends on WebRTC/NAT conditions and may still require TURN
+- pure P2P discovery requires UDP reachability; in strict CGNAT/symmetric NAT cases peers may never connect without relay infrastructure
+
+P2P diagnostics endpoint:
+- `GET /api/p2p/status`
+- returns local peer id, active bootstrap source, connected peer counts, and room-level peer state
 
 ## Run Desktop (Electron)
 1. Install dependencies:

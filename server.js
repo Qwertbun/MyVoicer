@@ -279,6 +279,23 @@ app.post("/api/notifications/check", (req, res) => {
   });
 });
 
+app.get("/api/p2p/status", (req, res) => {
+  const enabled = Boolean(P2P_MODE_ENABLED && p2pMesh && typeof p2pMesh.getDiagnostics === "function");
+  if (!enabled) {
+    res.json({
+      mode: NETWORK_MODE,
+      enabled: false,
+    });
+    return;
+  }
+
+  res.json({
+    mode: NETWORK_MODE,
+    enabled: true,
+    diagnostics: p2pMesh.getDiagnostics(),
+  });
+});
+
 function resolveMaybeRelative(filePath) {
   if (path.isAbsolute(filePath)) {
     return filePath;

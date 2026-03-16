@@ -17,6 +17,13 @@ const ROOM_PATH_PREFIX = "room";
 const MESSAGE_KEY_PREFIX = "message!";
 const VOICE_CHANNEL_KEY_PREFIX = "voice-channel!";
 const STORAGE_SAFE_NAME_RE = /[^a-z0-9._-]/gi;
+const DEFAULT_P2P_BOOTSTRAP_PORT = 49737;
+const P2P_BOOTSTRAP_ENV_KEYS = [
+  "P2P_BOOTSTRAP",
+  "QWERBENTUM_P2P_BOOTSTRAP",
+  "HYPERSWARM_BOOTSTRAP",
+];
+const P2P_NO_PEER_WARNING_DELAY_MS = 20000;
 
 const JSON_ENCODING = {
   preencode(state, value) {
@@ -109,6 +116,53 @@ function loadOrCreateBinaryFile(filePath, size) {
   return next;
 }
 
+function parseBootstrapNodes(rawValue) {
+  const raw = String(rawValue || "").trim();
+  if (!raw) {
+    return [];
+  }
+
+  const items = raw
+    .split(/[,\n;\r\t ]+/)
+    .map((item) => String(item || "").trim())
+    .filter(Boolean);
+
+  const unique = new Set();
+  const normalized = [];
+
+  for (const item of items) {
+    const value = item.includes(":") ? item : `${item}:${DEFAULT_P2P_BOOTSTRAP_PORT}`;
+    if (!unique.has(value)) {
+      unique.add(value);
+      normalized.push(value);
+    }
+  }
+
+  return normalized;
+}
+
+function resolveBootstrapNodesFromEnvironment() {
+  for (const envKey of P2P_BOOTSTRAP_ENV_KEYS) {
+    const rawValue = String(process.env[envKey] || "").trim();
+    if (!rawValue) {
+      continue;
+    }
+
+    const nodes = parseBootstrapNodes(rawValue);
+    if (nodes.length > 0) {
+      return {
+        envKey,
+        nodes,
+      };
+    }
+  }
+
+  return {
+    envKey: "",
+    nodes: [],
+  };
+}
+
 function listLocalSocketIds(io, room) {
   if (!room) {
     return [];
@@ -186,12 +240,25 @@ function createP2PMesh(options) {
 
   const swarmSeed = loadOrCreateBinaryFile(path.join(meshRoot, "swarm.seed"), 32);
   const logicalPeerId = toHex(loadOrCreateBinaryFile(path.join(meshRoot, "peer.id"), 32));
-  const swarm = new Hyperswarm({ seed: swarmSeed });
+  const bootstrapConfig = resolveBootstrapNodesFromEnvironment();
+  const swarm = new Hyperswarm({
+    seed: swarmSeed,
+    ...(bootstrapConfig.nodes.length > 0 ? { bootstrap: bootstrapConfig.nodes } : {}),
+  });
   const roomContexts = new Map();
   let closed = false;
 
   function log(...args) {
     console.log("[p2p]", ...args);
+  }
+
+  log(`local peer id=${logicalPeerId}`);
+  if (bootstrapConfig.nodes.length > 0) {
+    log(
+      `bootstrap override via ${bootstrapConfig.envKey}: ${bootstrapConfig.nodes.join(", ")}`
+    );
+  } else {
+    log("bootstrap override: default hyperdht bootstrap nodes");
   }
 
   function getRoom(roomId) {
@@ -593,6 +660,10 @@ function createP2PMesh(options) {
       onopen() {
         peerState.channelOpened = true;
         log(`channel open room=${ctx.roomId} peer=${peerKey}`);
+        if (ctx.noPeerWarningTimer) {
+          clearTimeout(ctx.noPeerWarningTimer);
+          ctx.noPeerWarningTimer = null;
+        }
         sendBootstrap(ctx, peerState);
         sendState(ctx, peerState);
       },
@@ -660,6 +731,7 @@ function createP2PMesh(options) {
       syncInFlight: false,
       lastHistorySnapshot: null,
       baseOpeningPromise: null,
+      noPeerWarningTimer: null,
     };
 
     roomContexts.set(cleanRoomId, ctx);
@@ -670,6 +742,21 @@ function createP2PMesh(options) {
     });
     log(`join topic room=${cleanRoomId} topic=${toHex(topic)}`);
     await ctx.discovery.flushed().catch(() => {});
+
+    ctx.noPeerWarningTimer = setTimeout(() => {
+      const room = getRoom(cleanRoomId);
+      if (!room || !hasLocalSockets(io, room)) {
+        return;
+      }
+      if (ctx.peerStates.size > 0) {
+        return;
+      }
+
+      log(
+        `no peers discovered in ${Math.round(P2P_NO_PEER_WARNING_DELAY_MS / 1000)}s for room=${cleanRoomId}. ` +
+        "Check UDP reachability, CGNAT restrictions, and bootstrap configuration."
+      );
+    }, P2P_NO_PEER_WARNING_DELAY_MS);
 
     for (const conn of swarm.connections) {
       attachConnectionToRoom(ctx, conn, toHex(conn.remotePublicKey));
@@ -737,6 +824,11 @@ function createP2PMesh(options) {
       ctx.discovery = null;
     }
 
+    if (ctx.noPeerWarningTimer) {
+      clearTimeout(ctx.noPeerWarningTimer);
+      ctx.noPeerWarningTimer = null;
+    }
+
     if (ctx.base) {
       ctx.base.removeAllListeners("update");
       await ctx.base.close().catch(() => {});
@@ -775,6 +867,23 @@ function createP2PMesh(options) {
     },
     getLocalPeerId() {
       return logicalPeerId;
+    },
+    getDiagnostics() {
+      return {
+        localPeerId: logicalPeerId,
+        bootstrapSource: bootstrapConfig.envKey || "default",
+        bootstrapNodes: bootstrapConfig.nodes.slice(),
+        swarmPublicKey: toHex(swarm?.keyPair?.publicKey),
+        connectionCount: Number(swarm?.connections?.size) || 0,
+        rooms: Array.from(roomContexts.values()).map((ctx) => ({
+          roomId: ctx.roomId,
+          topic: toHex(ctx.topic),
+          peerCount: ctx.peerStates.size,
+          remotePresenceCount: ctx.remotePresence.size,
+          hasAutobase: Boolean(ctx.base),
+          hasLocalSockets: hasLocalSockets(io, getRoom(ctx.roomId)),
+        })),
+      };
     },
     async ensureRoom(roomId) {
       return createRoomContext(roomId);
