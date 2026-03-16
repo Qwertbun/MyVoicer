@@ -407,6 +407,7 @@ const I18N = {
     defaultSpeakersSelected: "Default speakers selected",
     promptEnterServerId: "Enter server ID",
     connectionError: "Connection error: {details}",
+    backendUnavailable: "Backend is unavailable. Check server address and firewall.",
     notificationSelectedServer: "Selected server {room} from notification.",
     notificationMessageTitle: "{room} · {author}",
     notificationMessageFallback: "New message",
@@ -625,6 +626,7 @@ const I18N = {
     defaultSpeakersSelected: "Выбраны динамики по умолчанию",
     promptEnterServerId: "Введите ID сервера",
     connectionError: "Ошибка соединения: {details}",
+    backendUnavailable: "Сервер недоступен. Проверьте адрес и фаервол.",
     notificationSelectedServer: "Из уведомления выбран сервер {room}.",
     notificationMessageTitle: "{room} · {author}",
     notificationMessageFallback: "Новое сообщение",
@@ -1005,6 +1007,7 @@ const SETTINGS_TAB_GENERAL_ID = "general";
 const SETTINGS_TAB_NOTIFICATIONS_ID = "notifications";
 const NOTIFICATION_POLL_INTERVAL_MS = 120000;
 const MAX_PROCESSED_NOTIFICATION_IDS = 400;
+const JOIN_SOCKET_CONNECT_TIMEOUT_MS = 7000;
 
 let selfId = null;
 let roomState = null;
@@ -8876,6 +8879,35 @@ function resetSessionState() {
   setStatus(t("disconnected"));
 }
 
+function waitForSocketConnection(timeoutMs = JOIN_SOCKET_CONNECT_TIMEOUT_MS) {
+  if (socket.connected) {
+    return Promise.resolve(true);
+  }
+
+  return new Promise((resolve) => {
+    let settled = false;
+
+    const finalize = (ok) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeoutId);
+      socket.off("connect", onConnect);
+      socket.off("connect_error", onConnectError);
+      resolve(Boolean(ok));
+    };
+
+    const onConnect = () => finalize(true);
+    const onConnectError = () => finalize(false);
+    const timeoutId = setTimeout(() => finalize(false), Math.max(1000, Number(timeoutMs) || 0));
+
+    socket.once("connect", onConnect);
+    socket.once("connect_error", onConnectError);
+    socket.connect();
+  });
+}
+
 async function requestJoinRoom(targetRoomId = null) {
   const roomId = normalizeRoomIdValue(targetRoomId ?? roomInput.value);
   if (!roomId || roomId.toLowerCase() === MAIN_PAGE_LABEL) {
@@ -8924,6 +8956,16 @@ async function requestJoinRoom(targetRoomId = null) {
     updateRoomLabels(roomId);
     ensureSavedRoom(roomId);
     renderSavedRooms();
+
+    const isConnected = await waitForSocketConnection();
+    if (!isConnected) {
+      setStatus(
+        t("connectionError", {
+          details: t("backendUnavailable"),
+        })
+      );
+      return;
+    }
 
     await iceConfigReady;
 
@@ -9591,6 +9633,11 @@ socket.on("joined-room", async ({ room, selfId: incomingSelfId }) => {
 socket.on("connect", async () => {
   await fetchBackendNetworkMode();
   refreshNotificationAutomation({ sync: true });
+});
+
+socket.on("connect_error", (error) => {
+  const details = String(error?.message || t("backendUnavailable"));
+  setStatus(t("connectionError", { details }));
 });
 
 socket.on("room-state", async (room) => {

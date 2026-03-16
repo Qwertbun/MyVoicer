@@ -16,7 +16,10 @@
     "release": "node scripts/build-electron.js --win --publish always",
     "check:stun": "node scripts/check-stun-gist.js",
     "cert:issue:le": "powershell -ExecutionPolicy Bypass -File scripts/issue-letsencrypt.ps1",
-    "cert:renew:le": "powershell -ExecutionPolicy Bypass -File scripts/renew-letsencrypt.ps1"
+    "cert:renew:le": "powershell -ExecutionPolicy Bypass -File scripts/renew-letsencrypt.ps1",
+    "cert:linux:https": "bash scripts/certbot-https-linux.sh run",
+    "cert:linux:issue": "bash scripts/certbot-https-linux.sh issue",
+    "start:web:https:3001": "bash scripts/certbot-https-linux.sh start"
   },
   "dependencies": {
     "autobase": "^7.27.3",

@@ -27,6 +27,7 @@ const REMOTE_BACKEND_ENV_KEYS = [
   "QWERBENTUM_BACKEND_URL",
   "ELECTRON_REMOTE_BACKEND_URL",
 ];
+const DEFAULT_REMOTE_BACKEND_URL = "http://owa.mine-souls.ru:3001";
 
 let splashWindow = null;
 let mainWindow = null;
@@ -221,7 +222,7 @@ function resolveConfiguredBackendUrl() {
     }
   }
 
-  return "";
+  return normalizeConfiguredBackendUrl(DEFAULT_REMOTE_BACKEND_URL);
 }
 
 function resolveConfiguredP2PBootstrap() {

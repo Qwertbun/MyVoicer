@@ -5,13 +5,14 @@ set -euo pipefail
 MODE="${1:-run}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-DOMAIN="${DOMAIN:-}"
+DOMAIN="${DOMAIN:-owa.mine-souls.ru}"
 EMAIL="${EMAIL:-}"
 PORT="${PORT:-3001}"
 HOST="${HOST:-0.0.0.0}"
 NETWORK_MODE="${NETWORK_MODE:-server}"
 STAGING="${STAGING:-0}"
 CERTBOT_BIN="${CERTBOT_BIN:-certbot}"
+CERT_SOURCE="${CERT_SOURCE:-auto}"
 
 print_usage() {
   cat <<'EOF'
@@ -24,13 +25,14 @@ Modes:
   start  Start HTTPS backend with existing cert only.
 
 Environment:
-  DOMAIN         Required for run/issue/start.
+  DOMAIN         Domain name (default: owa.mine-souls.ru).
   EMAIL          Required for run/issue.
   PORT           HTTPS backend port (default: 3001).
   HOST           Backend bind host (default: 0.0.0.0).
   NETWORK_MODE   server | p2p | relay (default: server).
   STAGING        1 to use Let's Encrypt staging endpoint (default: 0).
   CERTBOT_BIN    Certbot command name/path (default: certbot).
+  CERT_SOURCE    auto | repo | system (default: auto).
 EOF
 }
 
@@ -47,6 +49,16 @@ normalize_network_mode() {
     server|p2p|relay) echo "${1}" ;;
     *)
       echo "[certbot-linux] invalid NETWORK_MODE='${1}'. Allowed: server, p2p, relay." >&2
+      exit 1
+      ;;
+  esac
+}
+
+normalize_cert_source() {
+  case "${1}" in
+    auto|repo|system) echo "${1}" ;;
+    *)
+      echo "[certbot-linux] invalid CERT_SOURCE='${1}'. Allowed: auto, repo, system." >&2
       exit 1
       ;;
   esac
@@ -71,8 +83,8 @@ ensure_port80_free() {
 }
 
 issue_certificate() {
-  if [[ -z "$DOMAIN" || -z "$EMAIL" ]]; then
-    echo "[certbot-linux] DOMAIN and EMAIL are required for certificate issue." >&2
+  if [[ -z "$EMAIL" ]]; then
+    echo "[certbot-linux] EMAIL is required for certificate issue." >&2
     print_usage
     exit 1
   fi
@@ -101,18 +113,59 @@ issue_certificate() {
   echo "[certbot-linux] certificate is ready."
 }
 
-start_https_backend() {
-  if [[ -z "$DOMAIN" ]]; then
-    echo "[certbot-linux] DOMAIN is required for start mode." >&2
-    print_usage
-    exit 1
+sync_certificate_to_repo() {
+  local source_cert="/etc/letsencrypt/live/${DOMAIN}/fullchain.pem"
+  local source_key="/etc/letsencrypt/live/${DOMAIN}/privkey.pem"
+  local target_dir="${REPO_ROOT}/certs/letsencrypt/export/${DOMAIN}"
+  local target_cert="${target_dir}/fullchain.pem"
+  local target_key="${target_dir}/privkey.pem"
+
+  if [[ ! -f "$source_cert" || ! -f "$source_key" ]]; then
+    echo "[certbot-linux] skip repo sync, source cert not found in /etc/letsencrypt/live/${DOMAIN}" >&2
+    return
   fi
 
-  local normalized_mode
-  normalized_mode="$(normalize_network_mode "$NETWORK_MODE")"
+  mkdir -p "$target_dir"
+  cp -f "$source_cert" "$target_cert"
+  cp -f "$source_key" "$target_key"
+  echo "[certbot-linux] synced certs to repo path: certs/letsencrypt/export/${DOMAIN}/"
+}
 
-  local cert_path="/etc/letsencrypt/live/${DOMAIN}/fullchain.pem"
-  local key_path="/etc/letsencrypt/live/${DOMAIN}/privkey.pem"
+resolve_certificate_paths() {
+  local normalized_source="$1"
+  local repo_cert="${REPO_ROOT}/certs/letsencrypt/export/${DOMAIN}/fullchain.pem"
+  local repo_key="${REPO_ROOT}/certs/letsencrypt/export/${DOMAIN}/privkey.pem"
+  local system_cert="/etc/letsencrypt/live/${DOMAIN}/fullchain.pem"
+  local system_key="/etc/letsencrypt/live/${DOMAIN}/privkey.pem"
+
+  if [[ "$normalized_source" == "repo" ]]; then
+    echo "${repo_cert}|${repo_key}"
+    return
+  fi
+
+  if [[ "$normalized_source" == "system" ]]; then
+    echo "${system_cert}|${system_key}"
+    return
+  fi
+
+  if [[ -f "$repo_cert" && -f "$repo_key" ]]; then
+    echo "${repo_cert}|${repo_key}"
+    return
+  fi
+
+  echo "${system_cert}|${system_key}"
+}
+
+start_https_backend() {
+  local normalized_mode
+  local normalized_cert_source
+  normalized_mode="$(normalize_network_mode "$NETWORK_MODE")"
+  normalized_cert_source="$(normalize_cert_source "$CERT_SOURCE")"
+
+  local resolved_pair
+  resolved_pair="$(resolve_certificate_paths "$normalized_cert_source")"
+  local cert_path="${resolved_pair%%|*}"
+  local key_path="${resolved_pair##*|}"
 
   if [[ ! -f "$cert_path" || ! -f "$key_path" ]]; then
     echo "[certbot-linux] certificate files not found:" >&2
@@ -135,10 +188,12 @@ start_https_backend() {
 case "$MODE" in
   run)
     issue_certificate
+    sync_certificate_to_repo
     start_https_backend
     ;;
   issue)
     issue_certificate
+    sync_certificate_to_repo
     ;;
   start)
     start_https_backend

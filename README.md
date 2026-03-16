@@ -65,9 +65,12 @@ P2P diagnostics endpoint:
 2. Start desktop app:
    npm start
 
-By default each Electron app starts its own local backend on `127.0.0.1`.
-That means two packaged apps on different PCs do not share rooms automatically, even if the room ID is the same.
-For Internet use, both desktop apps must point to one shared backend.
+Default Electron backend URL:
+- `http://owa.mine-souls.ru:3001`
+- this URL is used automatically if no `--backend-url=...` and no remote backend env override are provided.
+
+With current defaults Electron connects to the shared backend above.
+To use a different backend, pass CLI arg or env override.
 
 Remote backend mode:
 - PowerShell:
@@ -152,6 +155,27 @@ Renew certificates:
 - force WSL mode: `npm run cert:renew:le -- -UseWsl`
 
 Note: scripts export Windows-readable PEM files to `certs/letsencrypt/export/<domain>/`.
+
+## Linux: Certbot + HTTPS on port 3001
+For headless Linux server you can request cert and run HTTPS backend in one command:
+
+```bash
+cd ~/MyVoicer
+EMAIL=admin@mine-souls.ru NETWORK_MODE=server npm run cert:linux:https
+```
+
+What it does:
+- gets/renews Let's Encrypt certificate via `certbot --standalone` (uses port 80 for HTTP challenge)
+- default domain is `owa.mine-souls.ru` (override with `DOMAIN=...`)
+- syncs certs into repository path `certs/letsencrypt/export/<domain>/`
+- starts backend with:
+  - `HOST=0.0.0.0`
+  - `PORT=3001`
+  - `SSL_CERT_PATH` and `SSL_KEY_PATH` from repo export path if available, otherwise from `/etc/letsencrypt/live/<domain>/`
+
+Related commands:
+- issue/renew cert only: `EMAIL=admin@mine-souls.ru npm run cert:linux:issue`
+- start HTTPS with existing cert only: `NETWORK_MODE=server npm run start:web:https:3001`
 
 ## Internet desktop topology
 For two PCs in different networks:

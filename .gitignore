@@ -3,6 +3,10 @@ node_modules/
 npm-debug.log*
 release/
 release-temp/
-certs/
 data/
 public/chat-uploads/
+certs/letsencrypt/accounts/
+certs/letsencrypt/archive/
+certs/letsencrypt/live/
+certs/letsencrypt/logs/
+certs/letsencrypt/work/
