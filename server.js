@@ -4,7 +4,6 @@ const express = require("express");
 const http = require("http");
 const https = require("https");
 const { Server } = require("socket.io");
-const { createP2PMesh } = require("./p2p/mesh");
 
 const app = express();
 const rooms = new Map();
@@ -48,6 +47,7 @@ const CHAT_MIME_EXTENSION_FALLBACKS = Object.freeze({
 let chatStateSaveTimer = null;
 let chatStateSaveChain = Promise.resolve();
 let p2pMesh = null;
+let createP2PMesh = null;
 
 app.use(express.json({ limit: "256kb" }));
 app.use(express.static(PUBLIC_ROOT));
@@ -1196,6 +1196,7 @@ fs.mkdirSync(CHAT_STATE_ROOT, { recursive: true });
 loadChatStateFromDisk();
 
 if (P2P_MODE_ENABLED) {
+  ({ createP2PMesh } = require("./p2p/mesh"));
   p2pMesh = createP2PMesh({
     io,
     rooms,

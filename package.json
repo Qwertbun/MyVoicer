@@ -47,6 +47,7 @@
     },
     "files": [
       "electron/**/*",
+      "p2p/**/*",
       "public/**/*",
       "server.js",
       "scripts/**/*",
