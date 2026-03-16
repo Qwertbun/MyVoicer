@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="en" data-project-name="VM">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title id="page-title">Voice Servers</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="discord-shell">
+      <aside id="servers-rail" class="servers-rail" aria-label="Servers">
+        <button id="home-server-btn" type="button" class="server-icon server-brand" title="Voice Messenger">
+          VM
+        </button>
+        <div class="servers-divider" aria-hidden="true"></div>
+        <div id="saved-rooms-list" class="server-list" aria-label="Saved servers"></div>
+        <button id="add-room-btn" type="button" class="server-icon" title="Add server" aria-label="Add server">
+          <span class="material-symbols-rounded" data-icon-name="add" aria-hidden="true">+</span>
+        </button>
+      </aside>
+
+      <aside class="channels-sidebar">
+        <header class="guild-header">
+          <h1 id="app-title">Voice Messenger</h1>
+          <p id="app-subtitle">First entrant in each voice room becomes host and relays voice + screen.</p>
+        </header>
+
+        <form id="join-form" class="join-form">
+          <input id="room-input" type="hidden" value="" />
+          <p id="join-form-hint" class="join-form-hint">Connect to the selected server from the left rail.</p>
+          <button id="join-selected-btn" type="submit">Join Selected Server</button>
+        </form>
+
+        <div id="controls" class="controls hidden" aria-label="Call controls">
+          <button id="mute-btn" type="button" class="control-btn" aria-label="Mute" title="Mute">
+            <span class="material-symbols-rounded control-icon" data-icon-name="mic" aria-hidden="true">◉</span>
+          </button>
+
+          <div class="mic-sensitivity-wrap">
+            <button
+              id="mic-sensitivity-toggle-btn"
+              type="button"
+              class="control-btn"
+              aria-label="Mic sensitivity"
+              title="Mic sensitivity"
+              aria-expanded="false"
+              aria-controls="mic-sensitivity-popover"
+            >
+              <span class="material-symbols-rounded control-icon" data-icon-name="tune" aria-hidden="true">≡</span>
+              <span id="mic-sensitivity-chip" class="sensitivity-chip">100%</span>
+            </button>
+            <div id="mic-sensitivity-popover" class="mic-sensitivity-popover hidden" role="dialog" aria-modal="false">
+              <label class="mic-sensitivity-control" for="mic-sensitivity-range">
+                <span id="mic-sensitivity-label">Mic sensitivity</span>
+                <input
+                  id="mic-sensitivity-range"
+                  type="range"
+                  min="50"
+                  max="300"
+                  step="5"
+                  value="100"
+                />
+                <strong id="mic-sensitivity-value">100%</strong>
+              </label>
+            </div>
+          </div>
+
+          <button id="screen-btn" type="button" class="control-btn" aria-label="Share Screen" title="Share Screen">
+            <span class="material-symbols-rounded control-icon" data-icon-name="present_to_all" aria-hidden="true">▣</span>
+          </button>
+          <button id="leave-voice-btn" type="button" class="control-btn" aria-label="Leave Voice" title="Leave Voice">
+            <span class="material-symbols-rounded control-icon" data-icon-name="call_end" aria-hidden="true">⨯</span>
+          </button>
+          <button id="leave-btn" type="button" class="control-btn danger" aria-label="Leave server" title="Leave server">
+            <span class="material-symbols-rounded control-icon" data-icon-name="logout" aria-hidden="true">↩</span>
+          </button>
+        </div>
+
+        <div class="status-wrap">
+          <span id="status-label">Status:</span>
+          <strong id="status">Disconnected</strong>
+        </div>
+
+        <section class="channel-group">
+          <h2 id="text-channels-title">Text channels</h2>
+          <button type="button" class="channel-item active" aria-current="true">
+            # <span id="channel-room-label">main</span>
+          </button>
+        </section>
+
+        <section class="channel-group">
+          <div class="channel-group-header">
+            <h2 id="voice-rooms-title">Voice rooms</h2>
+            <button
+              id="add-voice-channel-btn"
+              type="button"
+              class="channel-group-add"
+              aria-label="Add voice room"
+              title="Add voice room"
+            >
+              <span class="material-symbols-rounded" data-icon-name="add" aria-hidden="true">+</span>
+            </button>
+          </div>
+          <div id="voice-channels-list" class="voice-channels-list"></div>
+        </section>
+      </aside>
+
+      <section class="workspace">
+        <header class="workspace-topbar">
+          <div class="channel-title">
+            <span>#</span>
+            <strong id="chat-room-title">main</strong>
+          </div>
+          <div id="topbar-meta" class="topbar-meta">Server chat + voice + screens</div>
+        </header>
+
+        <div class="workspace-grid">
+          <section class="chat-column">
+            <div id="chat-messages" class="chat-messages"></div>
+            <form id="chat-form" class="chat-form">
+              <div id="chat-attachments-preview" class="chat-attachments-preview hidden"></div>
+              <div class="chat-form-row">
+                <button id="chat-attach-btn" type="button" class="chat-attach-btn" aria-label="Attach files" disabled>
+                  <span class="material-symbols-rounded" data-icon-name="add" aria-hidden="true">+</span>
+                </button>
+                <input id="chat-file-input" class="chat-file-input" type="file" multiple />
+                <input
+                  id="chat-input"
+                  maxlength="1200"
+                  placeholder="Write to #main"
+                  autocomplete="off"
+                  disabled
+                />
+                <button id="chat-send-btn" type="submit" disabled>Send</button>
+              </div>
+            </form>
+          </section>
+
+          <aside class="info-column">
+            <section class="panel">
+              <h2 id="participants-title">Participants</h2>
+              <ul id="participants" class="participants"></ul>
+            </section>
+
+            <section class="panel">
+              <h2 id="screen-streams-title">Screen Streams</h2>
+              <div id="screens" class="screens-grid"></div>
+              <div id="screens-carousel-nav" class="screens-carousel-nav hidden">
+                <button id="screens-prev-btn" type="button" aria-label="Previous screen stream">Prev</button>
+                <span id="screens-carousel-indicator" aria-live="polite"></span>
+                <button id="screens-next-btn" type="button" aria-label="Next screen stream">Next</button>
+              </div>
+            </section>
+          </aside>
+        </div>
+      </section>
+    </main>
+
+    <button
+      id="profile-toggle-btn"
+      type="button"
+      class="profile-fab"
+      aria-controls="profile-panel"
+      aria-expanded="false"
+      title="Profile"
+    >
+      ME
+    </button>
+
+    <aside id="profile-panel" class="profile-panel hidden" aria-hidden="true">
+      <header class="profile-panel-header">
+        <strong id="profile-title">Profile</strong>
+        <button id="profile-close-btn" type="button" class="profile-close-btn" aria-label="Close profile">
+          <span class="material-symbols-rounded" data-icon-name="close" aria-hidden="true">×</span>
+        </button>
+      </header>
+
+      <label class="profile-field">
+        <span id="profile-nickname-label">Nickname</span>
+        <input id="name-input" maxlength="32" placeholder="Your name" />
+      </label>
+
+      <label class="profile-field">
+        <span id="profile-mic-label">Microphone</span>
+        <select id="profile-mic-select"></select>
+      </label>
+
+      <label class="profile-field">
+        <span id="profile-speaker-label">Speakers</span>
+        <select id="profile-speaker-select"></select>
+      </label>
+
+      <label class="profile-field">
+        <span id="profile-theme-label">Theme</span>
+        <select id="profile-theme-select"></select>
+      </label>
+
+      <label class="profile-field">
+        <span id="profile-language-label">Language</span>
+        <select id="profile-language-select"></select>
+      </label>
+
+      <label class="profile-field">
+        <span id="profile-motion-label">Motion</span>
+        <select id="profile-motion-select"></select>
+      </label>
+
+      <label class="profile-field">
+        <span id="profile-background-label">Background animation</span>
+        <select id="profile-background-select"></select>
+      </label>
+    </aside>
+
+    <div id="remote-audios"></div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>

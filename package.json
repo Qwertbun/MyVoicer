@@ -1,0 +1,66 @@
+{
+  "name": "qwerbentum",
+  "version": "1.0.0",
+  "description": "Voice messenger desktop/web app with room host as first entrant",
+  "main": "electron/main.js",
+  "scripts": {
+    "start": "node scripts/run-electron.js",
+    "start:electron": "node scripts/run-electron.js",
+    "start:web": "powershell -ExecutionPolicy Bypass -File scripts/start.ps1",
+    "start:web:raw": "node server.js",
+    "dist": "electron-builder --publish never",
+    "dist:win": "electron-builder --win --publish never",
+    "release": "electron-builder --win --publish always",
+    "check:stun": "node scripts/check-stun-gist.js",
+    "cert:issue:le": "powershell -ExecutionPolicy Bypass -File scripts/issue-letsencrypt.ps1",
+    "cert:renew:le": "powershell -ExecutionPolicy Bypass -File scripts/renew-letsencrypt.ps1"
+  },
+  "dependencies": {
+    "electron-updater": "^6.6.2",
+    "express": "^4.21.2",
+    "socket.io": "^4.8.1"
+  },
+  "devDependencies": {
+    "electron": "^36.0.0",
+    "electron-builder": "^26.0.12"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Qwertbun/qwerbentum.git"
+  },
+  "author": "Qwertbun",
+  "build": {
+    "appId": "com.qwertbun.qwerbentum",
+    "productName": "qwerbentum",
+    "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "electron/**/*",
+      "public/**/*",
+      "server.js",
+      "scripts/**/*",
+      "data/**/*",
+      "package.json"
+    ],
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "Qwertbun",
+        "repo": "qwerbentum",
+        "releaseType": "release"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    }
+  }
+}

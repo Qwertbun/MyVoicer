@@ -1,0 +1,8 @@
+node_modules/
+.env
+npm-debug.log*
+release/
+release-temp/
+certs/
+data/
+public/chat-uploads/

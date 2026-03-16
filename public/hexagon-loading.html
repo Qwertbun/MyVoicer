@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>HEXAGON</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Exo+2:wght@400;500;700&family=JetBrains+Mono:wght@500;700&family=Orbitron:wght@500;700;800&display=swap"
+    />
+    <link rel="stylesheet" href="hexagon-loading.css" />
+  </head>
+  <body>
+    <main id="boot-screen" class="boot-screen">
+      <canvas id="particle-canvas" aria-hidden="true"></canvas>
+      <div class="atmosphere" aria-hidden="true"></div>
+      <div class="scanlines" aria-hidden="true"></div>
+      <div class="vignette" aria-hidden="true"></div>
+
+      <div class="corner-readout corner-readout--left">CORE NODE 07 // STANDBY</div>
+      <div id="sync-readout" class="corner-readout corner-readout--right">SYNC 00.0%</div>
+
+      <svg
+        id="network-svg"
+        class="network-svg"
+        viewBox="-700 -700 1400 1400"
+        aria-hidden="true"
+      >
+        <g id="network-links"></g>
+        <g id="network-cells"></g>
+        <g id="network-pulses"></g>
+      </svg>
+
+      <button id="audio-toggle" class="audio-toggle" type="button" aria-label="Toggle sound">
+        SOUND: OFF
+      </button>
+
+      <section id="core-layer" class="core-layer" aria-hidden="true">
+        <div class="energy-core"></div>
+        <div class="pulse-wave pulse-wave--a"></div>
+        <div class="pulse-wave pulse-wave--b"></div>
+
+        <svg class="first-hex" viewBox="0 0 160 160">
+          <polygon pathLength="100" points="80,16 135,48 135,112 80,144 25,112 25,48"></polygon>
+        </svg>
+
+        <div class="hero-stack">
+          <svg class="hero-hex hero-hex--outer" viewBox="0 0 256 256">
+            <polygon points="128,18 223,73 223,183 128,238 33,183 33,73"></polygon>
+          </svg>
+
+          <svg class="hero-hex hero-hex--middle" viewBox="0 0 256 256">
+            <polygon points="128,38 206,83 206,173 128,218 50,173 50,83"></polygon>
+          </svg>
+
+          <svg class="hero-hex hero-hex--inner" viewBox="0 0 256 256">
+            <defs>
+              <linearGradient id="hero-fill-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" stop-color="#4be9ff" stop-opacity="0.42"></stop>
+                <stop offset="65%" stop-color="#4f77ff" stop-opacity="0.3"></stop>
+                <stop offset="100%" stop-color="#ba59ff" stop-opacity="0.38"></stop>
+              </linearGradient>
+            </defs>
+            <polygon
+              class="hero-fill"
+              points="128,56 190,92 190,164 128,200 66,164 66,92"
+            ></polygon>
+            <polygon
+              class="hero-outline"
+              points="128,56 190,92 190,164 128,200 66,164 66,92"
+            ></polygon>
+          </svg>
+
+          <svg class="progress-orbit" viewBox="0 0 420 420">
+            <circle class="orbit-track" cx="210" cy="210" r="188"></circle>
+            <circle id="progress-ring" class="orbit-progress" cx="210" cy="210" r="188"></circle>
+          </svg>
+
+          <div class="progress-readout"><span id="progress-value">000</span>%</div>
+        </div>
+      </section>
+
+      <section class="hud-panel" aria-live="polite">
+        <p id="status-main" class="status-main">INITIALIZING VOICE SYSTEM</p>
+        <p id="status-sub" class="status-sub">Synchronizing modules...</p>
+
+        <h1 class="brand-title" aria-label="HEXAGON">
+          <span style="--char-index: 0">H</span>
+          <span style="--char-index: 1">E</span>
+          <span style="--char-index: 2">X</span>
+          <span style="--char-index: 3">A</span>
+          <span style="--char-index: 4">G</span>
+          <span style="--char-index: 5">O</span>
+          <span style="--char-index: 6">N</span>
+        </h1>
+
+        <p class="boot-sequence-line">Boot sequence...</p>
+        <p class="status-online">SYSTEM ONLINE</p>
+      </section>
+
+      <div class="boot-flash" aria-hidden="true"></div>
+    </main>
+
+    <script src="hexagon-loading.js"></script>
+  </body>
+</html>
