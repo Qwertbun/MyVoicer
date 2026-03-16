@@ -985,6 +985,146 @@ function t(key, params = {}) {
   return fillTemplate(template, params);
 }
 
+const IS_ELECTRON_RUNTIME = Boolean(window && window.desktopApp);
+let activeInlineDialogClose = null;
+
+function closeInlineDialogWithResult(result) {
+  if (typeof activeInlineDialogClose === "function") {
+    const closer = activeInlineDialogClose;
+    activeInlineDialogClose = null;
+    closer(result);
+  }
+}
+
+function showInlineDialog({ mode, message, defaultValue = "" }) {
+  return new Promise((resolve) => {
+    closeInlineDialogWithResult(mode === "confirm" ? false : null);
+
+    const overlay = document.createElement("div");
+    overlay.className = "inline-dialog-overlay";
+    overlay.setAttribute("role", "presentation");
+
+    const panel = document.createElement("div");
+    panel.className = "inline-dialog";
+    panel.setAttribute("role", "dialog");
+    panel.setAttribute("aria-modal", "true");
+    panel.setAttribute("aria-label", String(message || ""));
+
+    const messageEl = document.createElement("p");
+    messageEl.className = "inline-dialog-message";
+    messageEl.textContent = String(message || "");
+    panel.appendChild(messageEl);
+
+    let input = null;
+    if (mode === "prompt") {
+      input = document.createElement("input");
+      input.className = "inline-dialog-input";
+      input.type = "text";
+      input.value = String(defaultValue || "");
+      panel.appendChild(input);
+    }
+
+    const actions = document.createElement("div");
+    actions.className = "inline-dialog-actions";
+
+    const cancelBtn = document.createElement("button");
+    cancelBtn.type = "button";
+    cancelBtn.className = "inline-dialog-btn cancel";
+    cancelBtn.textContent = "Cancel";
+
+    const confirmBtn = document.createElement("button");
+    confirmBtn.type = "button";
+    confirmBtn.className = "inline-dialog-btn confirm";
+    confirmBtn.textContent = "OK";
+
+    actions.appendChild(cancelBtn);
+    actions.appendChild(confirmBtn);
+    panel.appendChild(actions);
+    overlay.appendChild(panel);
+
+    const finish = (result) => {
+      if (!overlay.isConnected) {
+        resolve(result);
+        return;
+      }
+
+      document.removeEventListener("keydown", onKeydown, true);
+      overlay.remove();
+      if (activeInlineDialogClose === finish) {
+        activeInlineDialogClose = null;
+      }
+      resolve(result);
+    };
+
+    const onKeydown = (event) => {
+      if (!overlay.isConnected) {
+        return;
+      }
+
+      if (event.key === "Escape") {
+        event.preventDefault();
+        finish(mode === "confirm" ? false : null);
+        return;
+      }
+
+      if (event.key === "Enter") {
+        if (event.shiftKey || event.altKey || event.ctrlKey || event.metaKey) {
+          return;
+        }
+        event.preventDefault();
+        finish(mode === "confirm" ? true : input ? input.value : "");
+      }
+    };
+
+    cancelBtn.addEventListener("click", () => {
+      finish(mode === "confirm" ? false : null);
+    });
+    confirmBtn.addEventListener("click", () => {
+      finish(mode === "confirm" ? true : input ? input.value : "");
+    });
+
+    overlay.addEventListener("click", (event) => {
+      if (event.target === overlay) {
+        finish(mode === "confirm" ? false : null);
+      }
+    });
+
+    activeInlineDialogClose = finish;
+    document.addEventListener("keydown", onKeydown, true);
+    document.body.appendChild(overlay);
+
+    requestAnimationFrame(() => {
+      if (input) {
+        input.focus();
+        input.select();
+      } else {
+        confirmBtn.focus();
+      }
+    });
+  });
+}
+
+async function promptInput(message, defaultValue = "") {
+  if (!IS_ELECTRON_RUNTIME && typeof window.prompt === "function") {
+    return window.prompt(message, defaultValue);
+  }
+  return showInlineDialog({
+    mode: "prompt",
+    message,
+    defaultValue,
+  });
+}
+
+async function confirmInput(message) {
+  if (!IS_ELECTRON_RUNTIME && typeof window.confirm === "function") {
+    return window.confirm(message);
+  }
+  return showInlineDialog({
+    mode: "confirm",
+    message,
+  });
+}
+
 function getProjectName() {
   return PROJECT_NAME;
 }
@@ -1835,14 +1975,14 @@ function getUserInitial(name) {
   return (normalized.charAt(0) || "G").toUpperCase();
 }
 
-function requestCreateVoiceRoom() {
+async function requestCreateVoiceRoom() {
   if (!joined || !roomState) {
     setStatus(t("joinServerFirst"));
     return;
   }
 
   const suggested = t("roomSuggested", { index: getVoiceChannelsFromRoom(roomState).length + 1 });
-  const proposedName = window.prompt(t("promptVoiceRoomName"), suggested);
+  const proposedName = await promptInput(t("promptVoiceRoomName"), suggested);
   if (proposedName === null) {
     return;
   }
@@ -1857,13 +1997,13 @@ function requestCreateVoiceRoom() {
   });
 }
 
-function requestRenameVoiceRoom(channelId, currentName) {
+async function requestRenameVoiceRoom(channelId, currentName) {
   if (!joined || !roomState) {
     setStatus(t("joinServerFirst"));
     return;
   }
 
-  const proposedName = window.prompt(t("promptRenameVoiceRoom"), currentName);
+  const proposedName = await promptInput(t("promptRenameVoiceRoom"), currentName);
   if (proposedName === null) {
     return;
   }
@@ -1878,13 +2018,14 @@ function requestRenameVoiceRoom(channelId, currentName) {
   });
 }
 
-function requestDeleteVoiceRoom(channelId, channelName) {
+async function requestDeleteVoiceRoom(channelId, channelName) {
   if (!joined || !roomState) {
     setStatus(t("joinServerFirst"));
     return;
   }
 
-  if (!window.confirm(t("confirmDeleteVoiceRoom", { name: channelName }))) {
+  const approved = await confirmInput(t("confirmDeleteVoiceRoom", { name: channelName }));
+  if (!approved) {
     return;
   }
 
@@ -2015,7 +2156,7 @@ function renderVoiceChannels() {
     renameBtn.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
-      requestRenameVoiceRoom(channelId, channelName);
+      void requestRenameVoiceRoom(channelId, channelName);
     });
 
     const deleteBtn = document.createElement("button");
@@ -2028,7 +2169,7 @@ function renderVoiceChannels() {
     deleteBtn.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
-      requestDeleteVoiceRoom(channelId, channelName);
+      void requestDeleteVoiceRoom(channelId, channelName);
     });
 
     actions.appendChild(renameBtn);
@@ -2740,7 +2881,7 @@ function mapChatActionError(errorText) {
   return text;
 }
 
-function requestDeleteChatMessage(messageId) {
+async function requestDeleteChatMessage(messageId) {
   const message = getChatMessageById(messageId);
   if (!message) {
     setStatus(t("messageNotFound"));
@@ -2752,7 +2893,7 @@ function requestDeleteChatMessage(messageId) {
     return;
   }
 
-  const approved = window.confirm(t("confirmDeleteMessage"));
+  const approved = await confirmInput(t("confirmDeleteMessage"));
   if (!approved) {
     return;
   }
@@ -2864,7 +3005,7 @@ function createChatMessageElement(message) {
     deleteBtn.setAttribute("aria-label", t("deleteMessage"));
     deleteBtn.appendChild(createMaterialIcon("delete"));
     deleteBtn.addEventListener("click", () => {
-      requestDeleteChatMessage(message.id);
+      void requestDeleteChatMessage(message.id);
     });
 
     actions.appendChild(editBtn);
@@ -3026,7 +3167,7 @@ function createChatWelcomeElement() {
   joinButton.className = "chat-welcome-join-btn";
   joinButton.textContent = t("joinSelectedServer");
   joinButton.addEventListener("click", () => {
-    promptJoinServerAndConnect();
+    void promptJoinServerAndConnect();
   });
 
   const createButton = document.createElement("button");
@@ -3034,7 +3175,7 @@ function createChatWelcomeElement() {
   createButton.className = "chat-welcome-create-btn";
   createButton.textContent = t("createServer");
   createButton.addEventListener("click", () => {
-    promptCreateServerAndJoin();
+    void promptCreateServerAndJoin();
   });
 
   actions.appendChild(joinButton);
@@ -6668,8 +6809,8 @@ function getSuggestedJoinServerId() {
   return getSuggestedServerId();
 }
 
-function promptJoinServerAndConnect() {
-  const proposed = window.prompt(t("promptEnterServerId"), getSuggestedJoinServerId());
+async function promptJoinServerAndConnect() {
+  const proposed = await promptInput(t("promptEnterServerId"), getSuggestedJoinServerId());
   if (proposed === null) {
     return;
   }
@@ -6686,8 +6827,8 @@ function promptJoinServerAndConnect() {
   void requestJoinRoom(nextRoomId);
 }
 
-function promptCreateServerAndJoin() {
-  const proposed = window.prompt(t("promptEnterServerId"), getSuggestedServerId());
+async function promptCreateServerAndJoin() {
+  const proposed = await promptInput(t("promptEnterServerId"), getSuggestedServerId());
   if (proposed === null) {
     return;
   }
@@ -6758,7 +6899,7 @@ async function handlePreferredSpeakerDeviceChange(nextDeviceId) {
 
 joinForm.addEventListener("submit", (event) => {
   event.preventDefault();
-  promptJoinServerAndConnect();
+  void promptJoinServerAndConnect();
 });
 
 roomInput.addEventListener("input", () => {
@@ -6792,13 +6933,13 @@ if (homeServerBtn) {
 
 if (addRoomBtn) {
   addRoomBtn.addEventListener("click", () => {
-    promptCreateServerAndJoin();
+    void promptCreateServerAndJoin();
   });
 }
 
 if (addVoiceChannelBtn) {
   addVoiceChannelBtn.addEventListener("click", () => {
-    requestCreateVoiceRoom();
+    void requestCreateVoiceRoom();
   });
 }
 

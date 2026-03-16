@@ -3,7 +3,7 @@
 const path = require("path");
 const net = require("net");
 const fs = require("fs");
-const { app, BrowserWindow, ipcMain, shell } = require("electron");
+const { app, BrowserWindow, desktopCapturer, ipcMain, shell } = require("electron");
 
 const DEFAULT_PORT = Number(process.env.ELECTRON_INTERNAL_PORT || 3000);
 const UPDATE_CHECK_TIMEOUT_MS = Number(process.env.UPDATE_CHECK_TIMEOUT_MS || 12000);
@@ -18,6 +18,7 @@ let backendUrl = "";
 let shutdownInProgress = false;
 let startServer = null;
 let stopServer = null;
+const SESSION_PERMISSIONS_KEY = "__qwerbentumPermissionsConfigured";
 
 function ensureDirectorySafe(dirPath) {
   fs.mkdirSync(dirPath, { recursive: true });
@@ -186,6 +187,7 @@ function createMainWindow() {
   });
 
   mainWindow.setMenuBarVisibility(false);
+  configureMainWindowPermissions(mainWindow);
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url);
@@ -195,6 +197,79 @@ function createMainWindow() {
   mainWindow.on("closed", () => {
     mainWindow = null;
   });
+}
+
+function configureMainWindowPermissions(targetWindow) {
+  if (!targetWindow || targetWindow.isDestroyed()) {
+    return;
+  }
+
+  const session = targetWindow.webContents.session;
+  if (!session || session[SESSION_PERMISSIONS_KEY]) {
+    return;
+  }
+
+  const allowed = new Set(["media", "display-capture", "fullscreen"]);
+
+  const isMainWindowContents = (webContents) => {
+    return Boolean(
+      mainWindow
+        && !mainWindow.isDestroyed()
+        && webContents
+        && webContents.id === mainWindow.webContents.id
+    );
+  };
+
+  session.setPermissionRequestHandler((webContents, permission, callback) => {
+    if (!isMainWindowContents(webContents)) {
+      callback(false);
+      return;
+    }
+    callback(allowed.has(String(permission || "")));
+  });
+
+  if (typeof session.setPermissionCheckHandler === "function") {
+    session.setPermissionCheckHandler((webContents, permission) => {
+      if (!isMainWindowContents(webContents)) {
+        return false;
+      }
+      return allowed.has(String(permission || ""));
+    });
+  }
+
+  if (typeof session.setDisplayMediaRequestHandler === "function") {
+    session.setDisplayMediaRequestHandler(
+      async (request, callback) => {
+        try {
+          const sources = await desktopCapturer.getSources({
+            types: ["screen", "window"],
+            fetchWindowIcons: false,
+            thumbnailSize: { width: 0, height: 0 },
+          });
+          const selectedSource = sources.find((source) => String(source.id).startsWith("screen:")) || sources[0];
+          if (!selectedSource) {
+            callback({});
+            return;
+          }
+
+          callback({
+            video: selectedSource,
+            audio: request.audioRequested ? "loopback" : undefined,
+          });
+        } catch (error) {
+          console.warn(
+            `[desktop-capture] ${error && error.message ? error.message : String(error)}`
+          );
+          callback({});
+        }
+      },
+      {
+        useSystemPicker: true,
+      }
+    );
+  }
+
+  session[SESSION_PERMISSIONS_KEY] = true;
 }
 
 function revealMainWindow() {
