@@ -23,6 +23,26 @@ MVP voice messenger with server + voice-room host election:
 3. Open in browser:
    http://localhost:3000
 
+## Experimental P2P Network Mode
+This branch also contains an experimental backend transport mode that keeps the current runtime/UI
+but replaces central room discovery/history transport with:
+- `hyperswarm` for discovery and peer connections
+- `b4a` for topic/key encoding
+- `autobase` + `hyperbee` for shared message/voice-channel history
+
+Run it with:
+- `npm run start:web:p2p`
+
+Current scope of P2P mode:
+- room discovery between independent backend nodes
+- signal relay for WebRTC signaling
+- shared text history / shared voice channel definitions
+
+Current limitations of P2P mode:
+- file attachments are rejected in P2P mode for now
+- it is still experimental and should be treated as a feature branch
+- media still depends on WebRTC/NAT conditions and may still require TURN
+
 ## Run Desktop (Electron)
 1. Install dependencies:
    npm install

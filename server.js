@@ -4,6 +4,7 @@ const express = require("express");
 const http = require("http");
 const https = require("https");
 const { Server } = require("socket.io");
+const { createP2PMesh } = require("./p2p/mesh");
 
 const app = express();
 const rooms = new Map();
@@ -25,6 +26,8 @@ const CHAT_STATE_FILE = path.join(CHAT_STATE_ROOT, "chat-history.json");
 const CHAT_STATE_VERSION = 1;
 const CHAT_STATE_SAVE_DEBOUNCE_MS = 180;
 const MAX_NOTIFICATION_WATCH_ROOMS = 24;
+const NETWORK_MODE = String(process.env.NETWORK_MODE || "server").trim().toLowerCase();
+const P2P_MODE_ENABLED = NETWORK_MODE === "p2p";
 const CHAT_MIME_EXTENSION_FALLBACKS = Object.freeze({
   "image/jpeg": "jpg",
   "image/png": "png",
@@ -44,6 +47,7 @@ const CHAT_MIME_EXTENSION_FALLBACKS = Object.freeze({
 
 let chatStateSaveTimer = null;
 let chatStateSaveChain = Promise.resolve();
+let p2pMesh = null;
 
 app.use(express.json({ limit: "256kb" }));
 app.use(express.static(PUBLIC_ROOT));
@@ -162,6 +166,10 @@ function normalizeNotificationTimestamp(value) {
 
 function normalizeRoomIdValue(value) {
   return String(value || "").trim().slice(0, 32);
+}
+
+function isLocalSocketMember(memberId) {
+  return io?.sockets?.sockets?.has(memberId);
 }
 
 function serializeNotificationMessage(message) {
@@ -510,6 +518,8 @@ function getOrCreateRoom(roomId) {
       messages: [],
       voiceChannels: new Map(),
       memberVoiceChannel: new Map(),
+      memberJoinedAt: new Map(),
+      memberVoiceJoinedAt: new Map(),
     };
 
     ensureDefaultVoiceChannels(room);
@@ -525,7 +535,23 @@ function promoteVoiceChannelHost(room, channelId) {
   }
 
   const previousHost = channel.hostId;
-  const nextHost = channel.members.values().next().value || null;
+  const orderedMembers = Array.from(channel.members).sort((leftMemberId, rightMemberId) => {
+    const leftJoinedAt =
+      Number(room.memberVoiceJoinedAt?.get(leftMemberId)) ||
+      Number(room.memberJoinedAt?.get(leftMemberId)) ||
+      0;
+    const rightJoinedAt =
+      Number(room.memberVoiceJoinedAt?.get(rightMemberId)) ||
+      Number(room.memberJoinedAt?.get(rightMemberId)) ||
+      0;
+
+    if (leftJoinedAt !== rightJoinedAt) {
+      return leftJoinedAt - rightJoinedAt;
+    }
+
+    return String(leftMemberId).localeCompare(String(rightMemberId));
+  });
+  const nextHost = orderedMembers[0] || null;
   channel.hostId = nextHost;
 
   if (previousHost === nextHost) {
@@ -533,6 +559,10 @@ function promoteVoiceChannelHost(room, channelId) {
   }
 
   for (const memberId of channel.members) {
+    if (!isLocalSocketMember(memberId)) {
+      continue;
+    }
+
     io.to(memberId).emit("host-changed", {
       roomId: room.id,
       channelId,
@@ -549,6 +579,7 @@ function removeMemberFromVoiceChannel(room, memberId, notifyLeavingMember) {
 
   const previousChannel = room.voiceChannels.get(previousChannelId);
   room.memberVoiceChannel.delete(memberId);
+  room.memberVoiceJoinedAt?.delete(memberId);
 
   if (!previousChannel || !previousChannel.members.has(memberId)) {
     return;
@@ -558,8 +589,10 @@ function removeMemberFromVoiceChannel(room, memberId, notifyLeavingMember) {
   previousChannel.members.delete(memberId);
 
   for (const peerId of previousPeers) {
-    io.to(peerId).emit("peer-left", { peerId: memberId });
-    if (notifyLeavingMember) {
+    if (isLocalSocketMember(peerId)) {
+      io.to(peerId).emit("peer-left", { peerId: memberId });
+    }
+    if (notifyLeavingMember && isLocalSocketMember(memberId)) {
       io.to(memberId).emit("peer-left", { peerId });
     }
   }
@@ -584,12 +617,13 @@ function moveMemberToVoiceChannel(room, memberId, nextChannelId) {
   removeMemberFromVoiceChannel(room, memberId, true);
   targetChannel.members.add(memberId);
   room.memberVoiceChannel.set(memberId, targetChannelId);
+  room.memberVoiceJoinedAt?.set(memberId, Date.now());
 
   if (!targetChannel.hostId || !targetChannel.members.has(targetChannel.hostId)) {
     promoteVoiceChannelHost(room, targetChannelId);
   }
 
-  if (targetChannel.hostId && targetChannel.hostId !== memberId) {
+  if (targetChannel.hostId && targetChannel.hostId !== memberId && isLocalSocketMember(targetChannel.hostId)) {
     io.to(targetChannel.hostId).emit("peer-join-request", {
       peerId: memberId,
       name: room.names.get(memberId) || "Guest",
@@ -1130,6 +1164,9 @@ function loadChatStateFromDisk() {
 
 function broadcastRoomState(room) {
   for (const memberId of room.members) {
+    if (!isLocalSocketMember(memberId)) {
+      continue;
+    }
     io.to(memberId).emit("room-state", serializeRoomForMember(room, memberId));
   }
 }
@@ -1158,6 +1195,26 @@ fs.mkdirSync(CHAT_UPLOADS_ROOT, { recursive: true });
 fs.mkdirSync(CHAT_STATE_ROOT, { recursive: true });
 loadChatStateFromDisk();
 
+if (P2P_MODE_ENABLED) {
+  p2pMesh = createP2PMesh({
+    io,
+    rooms,
+    storageRoot: CHAT_STATE_ROOT,
+    maxChatMessages: MAX_CHAT_MESSAGES,
+    ensureDefaultVoiceChannels,
+    createVoiceChannel,
+    normalizeVoiceChannelId,
+    normalizeVoiceChannelName,
+    serializeChatMessage,
+    broadcastRoomState,
+    emitWatchedRoomChatMessage,
+    queueChatStateSave,
+    getOrCreateRoom,
+    promoteVoiceChannelHost,
+  });
+  console.log(`[network] mode=${NETWORK_MODE}, peer discovery via Hyperswarm enabled`);
+}
+
 io.on("connection", (socket) => {
   socket.data.roomId = null;
   socket.data.userName = "Guest";
@@ -1169,7 +1226,7 @@ io.on("connection", (socket) => {
     replaceWatchedRoomsForSocket(socket, roomIds);
   });
 
-  socket.on("join-room", ({ roomId, name, authorId } = {}) => {
+  socket.on("join-room", async ({ roomId, name, authorId } = {}) => {
     const cleanRoomId = String(roomId || "").trim();
     if (!cleanRoomId || cleanRoomId.toLowerCase() === "main") {
       return;
@@ -1187,8 +1244,13 @@ io.on("connection", (socket) => {
 
     room.members.add(socket.id);
     room.names.set(socket.id, cleanName);
+    room.memberJoinedAt.set(socket.id, Date.now());
     ensureDefaultVoiceChannels(room);
     socket.data.voiceChannelId = null;
+
+    if (P2P_MODE_ENABLED && p2pMesh) {
+      await p2pMesh.joinLocalSocket(cleanRoomId);
+    }
 
     socket.emit("joined-room", {
       room: serializeRoomForMember(room, socket.id),
@@ -1196,9 +1258,13 @@ io.on("connection", (socket) => {
     });
 
     broadcastRoomState(room);
+
+    if (P2P_MODE_ENABLED && p2pMesh) {
+      await p2pMesh.syncLocalPresence(cleanRoomId);
+    }
   });
 
-  socket.on("signal", ({ to, payload }) => {
+  socket.on("signal", async ({ to, payload }) => {
     if (!to || !payload) {
       return;
     }
@@ -1216,6 +1282,17 @@ io.on("connection", (socket) => {
 
     if (!areMembersInSameVoiceChannel(room, socket.id, targetId)) {
       return;
+    }
+
+    if (P2P_MODE_ENABLED && p2pMesh) {
+      const relayed = await p2pMesh.relaySignal(roomId, {
+        from: socket.id,
+        to: targetId,
+        payload,
+      });
+      if (relayed) {
+        return;
+      }
     }
 
     io.to(to).emit("signal", {
@@ -1237,13 +1314,22 @@ io.on("connection", (socket) => {
 
     const normalizedText = normalizeChatText(text);
     let normalizedAttachments = [];
-    try {
-      normalizedAttachments = await normalizeChatAttachments(attachments, roomId);
-    } catch (error) {
-      socket.emit("chat-error", {
-        message: error?.message || "Unable to upload attachment.",
-      });
-      return;
+    if (P2P_MODE_ENABLED) {
+      if (Array.isArray(attachments) && attachments.length > 0) {
+        socket.emit("chat-error", {
+          message: "Attachments are not supported in P2P mode yet.",
+        });
+        return;
+      }
+    } else {
+      try {
+        normalizedAttachments = await normalizeChatAttachments(attachments, roomId);
+      } catch (error) {
+        socket.emit("chat-error", {
+          message: error?.message || "Unable to upload attachment.",
+        });
+        return;
+      }
     }
 
     if (!normalizedText && normalizedAttachments.length === 0) {
@@ -1267,11 +1353,18 @@ io.on("connection", (socket) => {
     }
     queueChatStateSave();
 
-    io.to(roomId).emit("chat-message", serializeChatMessage(message));
-    emitWatchedRoomChatMessage(roomId, message);
+    const serializedMessage = serializeChatMessage(message);
+
+    if (P2P_MODE_ENABLED && p2pMesh) {
+      io.to(roomId).emit("chat-message", serializedMessage);
+      await p2pMesh.appendChatMessage(roomId, message);
+    } else {
+      io.to(roomId).emit("chat-message", serializedMessage);
+      emitWatchedRoomChatMessage(roomId, message);
+    }
   });
 
-  socket.on("edit-chat-message", ({ messageId, text, removeAttachmentIds } = {}, callback) => {
+  socket.on("edit-chat-message", async ({ messageId, text, removeAttachmentIds } = {}, callback) => {
     const roomId = socket.data.roomId;
     if (!roomId || !rooms.has(roomId)) {
       sendAck(callback, {
@@ -1364,17 +1457,23 @@ io.on("connection", (socket) => {
 
     message.text = normalizedText;
     message.editedAt = Date.now();
+    const serializedMessage = serializeChatMessage(message);
+
     queueChatStateSave();
 
-    const serializedMessage = serializeChatMessage(message);
-    io.to(roomId).emit("chat-message-updated", serializedMessage);
+    if (P2P_MODE_ENABLED && p2pMesh) {
+      io.to(roomId).emit("chat-message-updated", serializedMessage);
+      await p2pMesh.updateChatMessage(roomId, message);
+    } else {
+      io.to(roomId).emit("chat-message-updated", serializedMessage);
+    }
     sendAck(callback, {
       ok: true,
       message: serializedMessage,
     });
   });
 
-  socket.on("delete-chat-message", ({ messageId } = {}, callback) => {
+  socket.on("delete-chat-message", async ({ messageId } = {}, callback) => {
     const roomId = socket.data.roomId;
     if (!roomId || !rooms.has(roomId)) {
       sendAck(callback, {
@@ -1416,16 +1515,23 @@ io.on("connection", (socket) => {
     cleanupChatMessages([removedMessage]);
     queueChatStateSave();
 
-    io.to(roomId).emit("chat-message-deleted", {
-      messageId: cleanMessageId,
-    });
+    if (P2P_MODE_ENABLED && p2pMesh) {
+      io.to(roomId).emit("chat-message-deleted", {
+        messageId: cleanMessageId,
+      });
+      await p2pMesh.deleteChatMessage(roomId, cleanMessageId);
+    } else {
+      io.to(roomId).emit("chat-message-deleted", {
+        messageId: cleanMessageId,
+      });
+    }
 
     sendAck(callback, {
       ok: true,
     });
   });
 
-  socket.on("join-voice-channel", ({ channelId }) => {
+  socket.on("join-voice-channel", async ({ channelId }) => {
     const roomId = socket.data.roomId;
     if (!roomId || !rooms.has(roomId)) {
       return;
@@ -1439,9 +1545,13 @@ io.on("connection", (socket) => {
     const nextChannelId = moveMemberToVoiceChannel(room, socket.id, channelId);
     socket.data.voiceChannelId = nextChannelId;
     broadcastRoomState(room);
+
+    if (P2P_MODE_ENABLED && p2pMesh) {
+      await p2pMesh.syncLocalPresence(roomId);
+    }
   });
 
-  socket.on("leave-voice-channel", (callback) => {
+  socket.on("leave-voice-channel", async (callback) => {
     const roomId = socket.data.roomId;
     if (!roomId || !rooms.has(roomId)) {
       sendAck(callback, {
@@ -1470,12 +1580,17 @@ io.on("connection", (socket) => {
     removeMemberFromVoiceChannel(room, socket.id, true);
     socket.data.voiceChannelId = null;
     broadcastRoomState(room);
+
+    if (P2P_MODE_ENABLED && p2pMesh) {
+      await p2pMesh.syncLocalPresence(roomId);
+    }
+
     sendAck(callback, {
       ok: true,
     });
   });
 
-  socket.on("create-voice-channel", ({ name } = {}, callback) => {
+  socket.on("create-voice-channel", async ({ name } = {}, callback) => {
     const roomId = socket.data.roomId;
     if (!roomId || !rooms.has(roomId)) {
       sendAck(callback, {
@@ -1501,10 +1616,19 @@ io.on("connection", (socket) => {
     }
 
     broadcastRoomState(room);
+
+    if (P2P_MODE_ENABLED && p2pMesh) {
+      await p2pMesh.upsertVoiceChannel(roomId, {
+        id: result.channelId,
+        name: result.channelName,
+      });
+      await p2pMesh.syncLocalPresence(roomId);
+    }
+
     sendAck(callback, result);
   });
 
-  socket.on("rename-voice-channel", ({ channelId, name } = {}, callback) => {
+  socket.on("rename-voice-channel", async ({ channelId, name } = {}, callback) => {
     const roomId = socket.data.roomId;
     if (!roomId || !rooms.has(roomId)) {
       sendAck(callback, {
@@ -1530,10 +1654,19 @@ io.on("connection", (socket) => {
     }
 
     broadcastRoomState(room);
+
+    if (P2P_MODE_ENABLED && p2pMesh) {
+      await p2pMesh.upsertVoiceChannel(roomId, {
+        id: result.channelId,
+        name: result.channelName,
+      });
+      await p2pMesh.syncLocalPresence(roomId);
+    }
+
     sendAck(callback, result);
   });
 
-  socket.on("delete-voice-channel", ({ channelId } = {}, callback) => {
+  socket.on("delete-voice-channel", async ({ channelId } = {}, callback) => {
     const roomId = socket.data.roomId;
     if (!roomId || !rooms.has(roomId)) {
       sendAck(callback, {
@@ -1559,10 +1692,16 @@ io.on("connection", (socket) => {
     }
 
     broadcastRoomState(room);
+
+    if (P2P_MODE_ENABLED && p2pMesh) {
+      await p2pMesh.deleteVoiceChannel(roomId, result.channelId);
+      await p2pMesh.syncLocalPresence(roomId);
+    }
+
     sendAck(callback, result);
   });
 
-  socket.on("leave-room", () => {
+  socket.on("leave-room", async () => {
     const roomId = socket.data.roomId;
     if (!roomId || !rooms.has(roomId)) {
       return;
@@ -1572,10 +1711,16 @@ io.on("connection", (socket) => {
     removeMemberFromVoiceChannel(room, socket.id, false);
     room.members.delete(socket.id);
     room.names.delete(socket.id);
+    room.memberJoinedAt.delete(socket.id);
+    room.memberVoiceJoinedAt.delete(socket.id);
     socket.leave(roomId);
     socket.data.roomId = null;
     socket.data.voiceChannelId = null;
 
+    if (P2P_MODE_ENABLED && p2pMesh) {
+      await p2pMesh.leaveLocalSocket(roomId);
+    }
+
     if (room.members.size === 0) {
       if (room.messages.length === 0) {
         cleanupChatMessages(room.messages);
@@ -1588,9 +1733,13 @@ io.on("connection", (socket) => {
     } else {
       broadcastRoomState(room);
     }
+
+    if (P2P_MODE_ENABLED && p2pMesh && rooms.has(roomId)) {
+      await p2pMesh.syncLocalPresence(roomId);
+    }
   });
 
-  socket.on("disconnect", () => {
+  socket.on("disconnect", async () => {
     const roomId = socket.data.roomId;
     if (!roomId || !rooms.has(roomId)) {
       return;
@@ -1600,7 +1749,13 @@ io.on("connection", (socket) => {
     removeMemberFromVoiceChannel(room, socket.id, false);
     room.members.delete(socket.id);
     room.names.delete(socket.id);
+    room.memberJoinedAt.delete(socket.id);
+    room.memberVoiceJoinedAt.delete(socket.id);
     socket.data.voiceChannelId = null;
+
+    if (P2P_MODE_ENABLED && p2pMesh) {
+      await p2pMesh.leaveLocalSocket(roomId);
+    }
 
     if (room.members.size === 0) {
       if (room.messages.length === 0) {
@@ -1613,6 +1768,10 @@ io.on("connection", (socket) => {
       }
     } else {
       broadcastRoomState(room);
+    }
+
+    if (P2P_MODE_ENABLED && p2pMesh && rooms.has(roomId)) {
+      await p2pMesh.syncLocalPresence(roomId);
     }
   });
 });
@@ -1646,6 +1805,7 @@ function startServer(options = {}) {
       const displayHost = requestedHost === "0.0.0.0" ? "localhost" : requestedHost;
 
       console.log(`Voice messenger started on ${protocol}://${displayHost}:${actualPort}`);
+      console.log(`Network mode: ${P2P_MODE_ENABLED ? "p2p" : "server"}`);
       console.log(
         `ICE config: ${countUrls(iceConfig.iceServers)} url(s), TURN ${
           hasTurnServer(iceConfig.iceServers) ? "enabled" : "disabled"
@@ -1683,16 +1843,29 @@ function stopServer() {
   }
 
   return new Promise((resolve, reject) => {
-    io.close(() => {
-      server.close((error) => {
-        serverStartPromise = null;
-        if (error && error.code !== "ERR_SERVER_NOT_RUNNING") {
-          reject(error);
-          return;
-        }
-        resolve();
+    const finalizeClose = () => {
+      io.close(() => {
+        server.close((error) => {
+          serverStartPromise = null;
+          if (error && error.code !== "ERR_SERVER_NOT_RUNNING") {
+            reject(error);
+            return;
+          }
+          resolve();
+        });
       });
-    });
+    };
+
+    if (p2pMesh) {
+      p2pMesh.close()
+        .catch(() => {
+          // no-op
+        })
+        .finally(finalizeClose);
+      return;
+    }
+
+    finalizeClose();
   });
 }
 
