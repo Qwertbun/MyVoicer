@@ -15,6 +15,7 @@ const DESKTOP_SETTINGS_FILE_NAME = "desktop-settings.json";
 const NETWORK_MODE_ENV_KEY = "NETWORK_MODE";
 const NETWORK_MODE_SERVER = "server";
 const NETWORK_MODE_P2P = "p2p";
+const BOOT_ENV_NETWORK_MODE_RAW = String(process.env[NETWORK_MODE_ENV_KEY] || "").trim();
 const REMOTE_BACKEND_ENV_KEYS = [
   "QWERBENTUM_REMOTE_URL",
   "QWERBENTUM_BACKEND_URL",
@@ -86,7 +87,7 @@ function normalizeEmbeddedNetworkMode(value) {
 }
 
 function hasExplicitEnvironmentNetworkMode() {
-  return String(process.env[NETWORK_MODE_ENV_KEY] || "").trim() !== "";
+  return BOOT_ENV_NETWORK_MODE_RAW !== "";
 }
 
 function getDesktopSettingsPath() {
@@ -179,7 +180,7 @@ function resolveConfiguredBackendUrl() {
 
 function resolveEmbeddedNetworkMode() {
   if (hasExplicitEnvironmentNetworkMode()) {
-    return normalizeEmbeddedNetworkMode(process.env[NETWORK_MODE_ENV_KEY]);
+    return normalizeEmbeddedNetworkMode(BOOT_ENV_NETWORK_MODE_RAW);
   }
 
   const settings = loadDesktopSettings();
