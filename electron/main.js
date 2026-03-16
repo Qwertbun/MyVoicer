@@ -3,7 +3,7 @@
 const path = require("path");
 const net = require("net");
 const fs = require("fs");
-const { app, BrowserWindow, desktopCapturer, ipcMain, shell } = require("electron");
+const { Notification, app, BrowserWindow, desktopCapturer, ipcMain, shell } = require("electron");
 
 const DEFAULT_PORT = Number(process.env.ELECTRON_INTERNAL_PORT || 3000);
 const UPDATE_CHECK_TIMEOUT_MS = Number(process.env.UPDATE_CHECK_TIMEOUT_MS || 12000);
@@ -18,6 +18,7 @@ let backendUrl = "";
 let shutdownInProgress = false;
 let startServer = null;
 let stopServer = null;
+let pendingNotificationActivationPayload = null;
 const SESSION_PERMISSIONS_KEY = "__qwerbentumPermissionsConfigured";
 
 function ensureDirectorySafe(dirPath) {
@@ -193,6 +194,9 @@ function createMainWindow() {
     shell.openExternal(url);
     return { action: "deny" };
   });
+  mainWindow.webContents.on("did-finish-load", () => {
+    flushPendingNotificationActivation();
+  });
 
   mainWindow.on("closed", () => {
     mainWindow = null;
@@ -281,6 +285,32 @@ function revealMainWindow() {
     splashWindow.close();
     splashWindow = null;
   }
+}
+
+function isMainWindowActive() {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return false;
+  }
+
+  return Boolean(
+    mainWindow.isVisible() &&
+    !mainWindow.isMinimized() &&
+    mainWindow.isFocused()
+  );
+}
+
+function flushPendingNotificationActivation() {
+  if (
+    !pendingNotificationActivationPayload ||
+    !mainWindow ||
+    mainWindow.isDestroyed() ||
+    mainWindow.webContents.isLoading()
+  ) {
+    return;
+  }
+
+  mainWindow.webContents.send("notifications:activated", pendingNotificationActivationPayload);
+  pendingNotificationActivationPayload = null;
 }
 
 function buildLoadErrorPage(error, targetUrl) {
@@ -427,10 +457,57 @@ async function shutdownBackend() {
 
 ipcMain.handle("app:get-version", () => app.getVersion());
 ipcMain.handle("app:get-backend-url", () => backendUrl);
+ipcMain.handle("notifications:supported", () => Notification.isSupported());
+ipcMain.handle("notifications:show", (_event, payload = {}) => {
+  if (!Notification.isSupported()) {
+    return { shown: false, reason: "unsupported" };
+  }
+
+  if (isMainWindowActive()) {
+    return { shown: false, reason: "window-active" };
+  }
+
+  const title = String(payload.title || "").trim().slice(0, 120);
+  const body = String(payload.body || "").trim().slice(0, 320);
+  if (!title && !body) {
+    return { shown: false, reason: "empty" };
+  }
+
+  const notificationPayload = {
+    roomId: String(payload.roomId || "").trim().slice(0, 32),
+    messageId: String(payload.messageId || "").trim().slice(0, 64),
+    kind: String(payload.kind || "").trim().slice(0, 24),
+  };
+
+  const notification = new Notification({
+    title: title || "qwerbentum",
+    body,
+  });
+
+  notification.on("click", () => {
+    pendingNotificationActivationPayload = notificationPayload;
+
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      return;
+    }
+
+    if (mainWindow.isMinimized()) {
+      mainWindow.restore();
+    }
+
+    mainWindow.show();
+    mainWindow.focus();
+    flushPendingNotificationActivation();
+  });
+
+  notification.show();
+  return { shown: true };
+});
 
 app.whenReady().then(async () => {
   try {
     await launchMainFlow();
+    flushPendingNotificationActivation();
   } catch (error) {
     console.error(`[main] launch failed: ${error && error.message ? error.message : String(error)}`);
     if (!mainWindow) {
@@ -439,6 +516,7 @@ app.whenReady().then(async () => {
     const fallbackHtml = buildLoadErrorPage(error, backendUrl || "not-initialized");
     await mainWindow.loadURL(`data:text/html;charset=UTF-8,${encodeURIComponent(fallbackHtml)}`);
     revealMainWindow();
+    flushPendingNotificationActivation();
   }
 
   app.on("activate", () => {
@@ -448,6 +526,7 @@ app.whenReady().then(async () => {
         console.error(`[main] failed to re-open window: ${error.message}`);
       });
       revealMainWindow();
+      flushPendingNotificationActivation();
     }
   });
 });

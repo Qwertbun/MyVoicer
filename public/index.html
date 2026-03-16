@@ -175,40 +175,106 @@
         </button>
       </header>
 
-      <label class="profile-field">
-        <span id="profile-nickname-label">Nickname</span>
-        <input id="name-input" maxlength="32" placeholder="Your name" />
-      </label>
+      <div id="profile-tabs" class="profile-tabs" role="tablist" aria-label="Settings sections">
+        <button
+          id="profile-tab-general"
+          type="button"
+          class="profile-tab active"
+          data-settings-tab-target="general"
+          role="tab"
+          aria-selected="true"
+          aria-controls="profile-general-panel"
+        >
+          General
+        </button>
+        <button
+          id="profile-tab-notifications"
+          type="button"
+          class="profile-tab"
+          data-settings-tab-target="notifications"
+          role="tab"
+          aria-selected="false"
+          aria-controls="profile-notifications-panel"
+        >
+          Notifications
+        </button>
+      </div>
 
-      <label class="profile-field">
-        <span id="profile-mic-label">Microphone</span>
-        <select id="profile-mic-select"></select>
-      </label>
+      <section
+        id="profile-general-panel"
+        class="profile-settings-panel"
+        data-settings-tab-panel="general"
+        role="tabpanel"
+        aria-labelledby="profile-tab-general"
+      >
+        <label class="profile-field">
+          <span id="profile-nickname-label">Nickname</span>
+          <input id="name-input" maxlength="32" placeholder="Your name" />
+        </label>
 
-      <label class="profile-field">
-        <span id="profile-speaker-label">Speakers</span>
-        <select id="profile-speaker-select"></select>
-      </label>
+        <label class="profile-field">
+          <span id="profile-mic-label">Microphone</span>
+          <select id="profile-mic-select"></select>
+        </label>
 
-      <label class="profile-field">
-        <span id="profile-theme-label">Theme</span>
-        <select id="profile-theme-select"></select>
-      </label>
+        <label class="profile-field">
+          <span id="profile-speaker-label">Speakers</span>
+          <select id="profile-speaker-select"></select>
+        </label>
 
-      <label class="profile-field">
-        <span id="profile-language-label">Language</span>
-        <select id="profile-language-select"></select>
-      </label>
+        <label class="profile-field">
+          <span id="profile-theme-label">Theme</span>
+          <select id="profile-theme-select"></select>
+        </label>
 
-      <label class="profile-field">
-        <span id="profile-motion-label">Motion</span>
-        <select id="profile-motion-select"></select>
-      </label>
+        <label class="profile-field">
+          <span id="profile-language-label">Language</span>
+          <select id="profile-language-select"></select>
+        </label>
 
-      <label class="profile-field">
-        <span id="profile-background-label">Background animation</span>
-        <select id="profile-background-select"></select>
-      </label>
+        <label class="profile-field">
+          <span id="profile-motion-label">Motion</span>
+          <select id="profile-motion-select"></select>
+        </label>
+
+        <label class="profile-field">
+          <span id="profile-background-label">Background animation</span>
+          <select id="profile-background-select"></select>
+        </label>
+      </section>
+
+      <section
+        id="profile-notifications-panel"
+        class="profile-settings-panel hidden"
+        data-settings-tab-panel="notifications"
+        role="tabpanel"
+        aria-labelledby="profile-tab-notifications"
+      >
+        <label class="settings-toggle" for="notifications-enabled-toggle">
+          <div class="settings-toggle-copy">
+            <strong id="notifications-enabled-label">Enable desktop notifications</strong>
+          </div>
+          <input id="notifications-enabled-toggle" type="checkbox" />
+        </label>
+
+        <label class="settings-toggle" for="notifications-saved-toggle">
+          <div class="settings-toggle-copy">
+            <strong id="notifications-saved-label">Notify on new messages in saved servers</strong>
+          </div>
+          <input id="notifications-saved-toggle" type="checkbox" />
+        </label>
+
+        <label class="settings-toggle" for="notifications-mentions-toggle">
+          <div class="settings-toggle-copy">
+            <strong id="notifications-mentions-label">Notify on @nickname mentions</strong>
+          </div>
+          <input id="notifications-mentions-toggle" type="checkbox" />
+        </label>
+
+        <p id="notifications-support-note" class="settings-note hidden">
+          Desktop notifications are available in Electron only.
+        </p>
+      </section>
     </aside>
 
     <div id="remote-audios"></div>

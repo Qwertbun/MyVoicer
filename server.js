@@ -24,6 +24,7 @@ const CHAT_STATE_ROOT = process.env.CHAT_STATE_ROOT
 const CHAT_STATE_FILE = path.join(CHAT_STATE_ROOT, "chat-history.json");
 const CHAT_STATE_VERSION = 1;
 const CHAT_STATE_SAVE_DEBOUNCE_MS = 180;
+const MAX_NOTIFICATION_WATCH_ROOMS = 24;
 const CHAT_MIME_EXTENSION_FALLBACKS = Object.freeze({
   "image/jpeg": "jpg",
   "image/png": "png",
@@ -44,6 +45,7 @@ const CHAT_MIME_EXTENSION_FALLBACKS = Object.freeze({
 let chatStateSaveTimer = null;
 let chatStateSaveChain = Promise.resolve();
 
+app.use(express.json({ limit: "256kb" }));
 app.use(express.static(PUBLIC_ROOT));
 app.use("/chat-uploads", express.static(CHAT_UPLOADS_ROOT));
 
@@ -59,9 +61,9 @@ const DEFAULT_STUN_URLS = [
   "stun:stun.linphone.org:3478",
 ];
 const DEFAULT_TURN_URLS = [
-  "turn:owa.mine-souls.ru:3478?transport=udp",
-  "turn:owa.mine-souls.ru:3478?transport=tcp",
-  "turns:owa.mine-souls.ru:5349?transport=tcp",
+  "turn:213.108.170.61:3478?transport=udp",
+  "turn:213.108.170.61:3478?transport=tcp",
+  "turns:213.108.170.61:5349?transport=tcp",
 ];
 const DEFAULT_TURN_USERNAME = "lan";
 const DEFAULT_TURN_CREDENTIAL = "258741963";
@@ -148,6 +150,121 @@ const iceConfig = buildIceConfig();
 app.get("/api/ice-config", (req, res) => {
   res.setHeader("Cache-Control", "no-store");
   res.json(iceConfig);
+});
+
+function normalizeNotificationTimestamp(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return 0;
+  }
+  return Math.round(numeric);
+}
+
+function serializeNotificationMessage(message) {
+  if (!message || typeof message !== "object") {
+    return null;
+  }
+
+  return {
+    id: String(message.id || ""),
+    userId: String(message.userId || ""),
+    userName: String(message.userName || "Guest"),
+    text: normalizeChatText(message.text),
+    createdAt: normalizeNotificationTimestamp(message.createdAt) || Date.now(),
+  };
+}
+
+function normalizeNotificationRoomCheck(entry) {
+  if (!entry || typeof entry !== "object") {
+    return null;
+  }
+
+  const roomId = normalizeRoomIdValue(entry.roomId);
+  if (!roomId || roomId.toLowerCase() === "main") {
+    return null;
+  }
+
+  return {
+    roomId,
+    lastSeenMessageId: normalizeChatMessageId(entry.lastSeenMessageId),
+    lastSeenCreatedAt: normalizeNotificationTimestamp(entry.lastSeenCreatedAt),
+  };
+}
+
+function buildNotificationCheckResponseForRoom(roomId, room, checkpoint) {
+  const roomMessages = Array.isArray(room?.messages) ? room.messages : [];
+  const latestMessage = roomMessages.length > 0
+    ? serializeNotificationMessage(roomMessages[roomMessages.length - 1])
+    : null;
+
+  const response = {
+    roomId,
+    messages: [],
+    latestMessageId: latestMessage?.id || "",
+    latestCreatedAt: latestMessage?.createdAt || 0,
+  };
+
+  const hasCheckpoint = Boolean(
+    checkpoint?.lastSeenMessageId || normalizeNotificationTimestamp(checkpoint?.lastSeenCreatedAt) > 0
+  );
+  if (!hasCheckpoint || roomMessages.length === 0) {
+    return response;
+  }
+
+  let nextMessages = [];
+  if (checkpoint.lastSeenMessageId) {
+    const knownIndex = roomMessages.findIndex(
+      (message) => String(message?.id || "") === checkpoint.lastSeenMessageId
+    );
+    if (knownIndex >= 0) {
+      nextMessages = roomMessages.slice(knownIndex + 1);
+    } else if (checkpoint.lastSeenCreatedAt > 0) {
+      nextMessages = roomMessages.filter((message) => {
+        const createdAt = normalizeNotificationTimestamp(message?.createdAt);
+        return (
+          createdAt >= checkpoint.lastSeenCreatedAt &&
+          String(message?.id || "") !== checkpoint.lastSeenMessageId
+        );
+      });
+    }
+  } else if (checkpoint.lastSeenCreatedAt > 0) {
+    nextMessages = roomMessages.filter(
+      (message) => normalizeNotificationTimestamp(message?.createdAt) > checkpoint.lastSeenCreatedAt
+    );
+  }
+
+  response.messages = nextMessages
+    .map((message) => serializeNotificationMessage(message))
+    .filter(Boolean);
+
+  return response;
+}
+
+app.post("/api/notifications/check", (req, res) => {
+  const requestedRooms = Array.isArray(req.body?.rooms) ? req.body.rooms : [];
+  const normalizedChecks = [];
+  const knownRoomIds = new Set();
+
+  for (const entry of requestedRooms) {
+    const normalized = normalizeNotificationRoomCheck(entry);
+    if (!normalized || knownRoomIds.has(normalized.roomId)) {
+      continue;
+    }
+
+    knownRoomIds.add(normalized.roomId);
+    normalizedChecks.push(normalized);
+    if (normalizedChecks.length >= MAX_NOTIFICATION_WATCH_ROOMS) {
+      break;
+    }
+  }
+
+  res.setHeader("Cache-Control", "no-store");
+  res.json({
+    rooms: normalizedChecks.map((checkpoint) => {
+      const room = rooms.get(checkpoint.roomId) || null;
+      return buildNotificationCheckResponseForRoom(checkpoint.roomId, room, checkpoint);
+    }),
+  });
 });
 
 function resolveMaybeRelative(filePath) {
@@ -584,6 +701,45 @@ function serializeChatMessage(message) {
   return serialized;
 }
 
+function replaceWatchedRoomsForSocket(socket, roomIds) {
+  const watchedRoomIds = new Set();
+  const input = Array.isArray(roomIds) ? roomIds : [];
+
+  for (const roomId of input) {
+    const cleanRoomId = normalizeRoomIdValue(roomId);
+    if (!cleanRoomId || cleanRoomId.toLowerCase() === "main") {
+      continue;
+    }
+
+    watchedRoomIds.add(cleanRoomId);
+    if (watchedRoomIds.size >= MAX_NOTIFICATION_WATCH_ROOMS) {
+      break;
+    }
+  }
+
+  socket.data.watchedRoomIds = watchedRoomIds;
+  return Array.from(watchedRoomIds);
+}
+
+function emitWatchedRoomChatMessage(roomId, message) {
+  const serializedMessage = serializeNotificationMessage(message);
+  if (!serializedMessage || !roomId) {
+    return;
+  }
+
+  for (const clientSocket of io.sockets.sockets.values()) {
+    const watchedRoomIds = clientSocket?.data?.watchedRoomIds;
+    if (!(watchedRoomIds instanceof Set) || !watchedRoomIds.has(roomId)) {
+      continue;
+    }
+
+    clientSocket.emit("saved-room-chat-message", {
+      roomId,
+      message: serializedMessage,
+    });
+  }
+}
+
 function isPathInside(parentPath, targetPath) {
   const parent = path.resolve(parentPath);
   const target = path.resolve(targetPath);
@@ -1003,6 +1159,11 @@ io.on("connection", (socket) => {
   socket.data.userName = "Guest";
   socket.data.voiceChannelId = null;
   socket.data.chatAuthorId = socket.id;
+  socket.data.watchedRoomIds = new Set();
+
+  socket.on("watch-saved-rooms", ({ roomIds } = {}) => {
+    replaceWatchedRoomsForSocket(socket, roomIds);
+  });
 
   socket.on("join-room", ({ roomId, name, authorId } = {}) => {
     const cleanRoomId = String(roomId || "").trim();
@@ -1103,6 +1264,7 @@ io.on("connection", (socket) => {
     queueChatStateSave();
 
     io.to(roomId).emit("chat-message", serializeChatMessage(message));
+    emitWatchedRoomChatMessage(roomId, message);
   });
 
   socket.on("edit-chat-message", ({ messageId, text, removeAttachmentIds } = {}, callback) => {

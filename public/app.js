@@ -65,6 +65,17 @@ const profileThemeSelect = document.getElementById("profile-theme-select");
 const profileLanguageSelect = document.getElementById("profile-language-select");
 const profileMotionSelect = document.getElementById("profile-motion-select");
 const profileBackgroundSelect = document.getElementById("profile-background-select");
+const profileTabGeneralBtn = document.getElementById("profile-tab-general");
+const profileTabNotificationsBtn = document.getElementById("profile-tab-notifications");
+const profileGeneralPanel = document.getElementById("profile-general-panel");
+const profileNotificationsPanel = document.getElementById("profile-notifications-panel");
+const notificationsEnabledLabelEl = document.getElementById("notifications-enabled-label");
+const notificationsSavedLabelEl = document.getElementById("notifications-saved-label");
+const notificationsMentionsLabelEl = document.getElementById("notifications-mentions-label");
+const notificationsSupportNoteEl = document.getElementById("notifications-support-note");
+const notificationsEnabledToggle = document.getElementById("notifications-enabled-toggle");
+const notificationsSavedToggle = document.getElementById("notifications-saved-toggle");
+const notificationsMentionsToggle = document.getElementById("notifications-mentions-toggle");
 
 const DEFAULT_RTC_CONFIG = {
   iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
@@ -110,6 +121,9 @@ const PROFILE_THEME_STORAGE_KEY = "voice_profile_theme_v1";
 const PROFILE_LANGUAGE_STORAGE_KEY = "voice_profile_language_v1";
 const PROFILE_MOTION_STORAGE_KEY = "voice_profile_motion_v1";
 const PROFILE_BACKGROUND_STORAGE_KEY = "voice_profile_background_v1";
+const PROFILE_NOTIFICATIONS_ENABLED_STORAGE_KEY = "voice_profile_notifications_enabled_v1";
+const PROFILE_NOTIFICATIONS_SAVED_STORAGE_KEY = "voice_profile_notifications_saved_v1";
+const PROFILE_NOTIFICATIONS_MENTIONS_STORAGE_KEY = "voice_profile_notifications_mentions_v1";
 const CHAT_AUTHOR_ID = loadOrCreateChatAuthorId();
 const DEFAULT_THEME_ID = "dark";
 const DEFAULT_LANGUAGE_ID = "en";
@@ -196,6 +210,12 @@ const I18N = {
     language: "Language",
     motion: "Motion",
     backgroundAnimation: "Background animation",
+    generalSettings: "General",
+    notificationsSettings: "Notifications",
+    enableDesktopNotifications: "Enable desktop notifications",
+    notifySavedServerMessages: "Notify on new messages in saved servers",
+    notifyMentions: "Notify on @nickname mentions",
+    notificationElectronOnly: "Desktop notifications are available in Electron only.",
     motionOff: "Off",
     motionCalm: "Calm",
     motionBalanced: "Balanced",
@@ -343,6 +363,13 @@ const I18N = {
     defaultSpeakersSelected: "Default speakers selected",
     promptEnterServerId: "Enter server ID",
     connectionError: "Connection error: {details}",
+    notificationSelectedServer: "Selected server {room} from notification.",
+    notificationMessageTitle: "{room} · {author}",
+    notificationMessageFallback: "New message",
+    notificationSummaryTitle: "New messages in {room}",
+    notificationSummaryBody: "{count} new messages. Last: {author}: {text}",
+    notificationMentionTitle: "Mention in {room}",
+    notificationMentionBody: "{author} mentioned you: {text}",
     warningHttps: "Warning: open via HTTPS on other PCs, otherwise microphone request may be blocked.",
   },
   ru: {
@@ -382,6 +409,12 @@ const I18N = {
     language: "Язык",
     motion: "Анимации",
     backgroundAnimation: "Анимация фона",
+    generalSettings: "Общие",
+    notificationsSettings: "Уведомления",
+    enableDesktopNotifications: "Включить desktop-уведомления",
+    notifySavedServerMessages: "Уведомлять о новых сообщениях в сохраненных серверах",
+    notifyMentions: "Уведомлять об упоминаниях через @ник",
+    notificationElectronOnly: "Desktop-уведомления доступны только в Electron.",
     motionOff: "Выключено",
     motionCalm: "Спокойно",
     motionBalanced: "Сбалансировано",
@@ -529,6 +562,13 @@ const I18N = {
     defaultSpeakersSelected: "Выбраны динамики по умолчанию",
     promptEnterServerId: "Введите ID сервера",
     connectionError: "Ошибка соединения: {details}",
+    notificationSelectedServer: "Из уведомления выбран сервер {room}.",
+    notificationMessageTitle: "{room} · {author}",
+    notificationMessageFallback: "Новое сообщение",
+    notificationSummaryTitle: "Новые сообщения в {room}",
+    notificationSummaryBody: "{count} новых сообщений. Последнее: {author}: {text}",
+    notificationMentionTitle: "Упоминание в {room}",
+    notificationMentionBody: "{author} упомянул вас: {text}",
     warningHttps:
       "Предупреждение: на других ПК открывайте по HTTPS, иначе запрос микрофона может быть заблокирован.",
   },
@@ -898,6 +938,10 @@ const localHosts = new Set(["localhost", "127.0.0.1", "[::1]"]);
 const mobileScreensQuery = window.matchMedia("(max-width: 760px)");
 const SAVED_ROOMS_STORAGE_KEY = "voice_messenger_saved_rooms_v1";
 const MAX_SAVED_ROOMS = 24;
+const SETTINGS_TAB_GENERAL_ID = "general";
+const SETTINGS_TAB_NOTIFICATIONS_ID = "notifications";
+const NOTIFICATION_POLL_INTERVAL_MS = 120000;
+const MAX_PROCESSED_NOTIFICATION_IDS = 400;
 
 let selfId = null;
 let roomState = null;
@@ -938,6 +982,15 @@ let preferredThemeId = DEFAULT_THEME_ID;
 let preferredLanguageId = DEFAULT_LANGUAGE_ID;
 let preferredMotionProfileId = DEFAULT_MOTION_PROFILE_ID;
 let preferredBackgroundAnimationId = DEFAULT_BACKGROUND_ANIMATION_ID;
+let activeSettingsTabId = SETTINGS_TAB_GENERAL_ID;
+let notificationPreviewRoomId = "";
+let desktopNotificationsSupported = false;
+let notificationsEnabled = true;
+let notificationsSavedRoomsEnabled = true;
+let notificationsMentionsEnabled = true;
+let notificationPollTimerId = null;
+let notificationSyncInProgress = false;
+let desktopNotificationActivationCleanup = null;
 
 const peers = new Map();
 const sourceMedia = new Map();
@@ -954,6 +1007,9 @@ const screenStartedAtByUserId = new Map();
 const screenAudioTrackIdsBySource = new Map();
 const speakingStateByUserId = new Map();
 const speakingUserIds = new Set();
+const notificationCheckpoints = new Map();
+const processedNotificationMessageIds = [];
+const processedNotificationMessageIdSet = new Set();
 let speakingDetectionTimer = null;
 let playbackContext = null;
 let micProcessingContext = null;
@@ -1447,6 +1503,575 @@ function applyBackgroundAnimation(backgroundAnimationId, { persist = true } = {}
   }
 }
 
+function normalizeSettingsTabId(value) {
+  return String(value || "").trim().toLowerCase() === SETTINGS_TAB_NOTIFICATIONS_ID
+    ? SETTINGS_TAB_NOTIFICATIONS_ID
+    : SETTINGS_TAB_GENERAL_ID;
+}
+
+function setActiveSettingsTab(nextTabId) {
+  activeSettingsTabId = normalizeSettingsTabId(nextTabId);
+
+  const tabBindings = [
+    [profileTabGeneralBtn, profileGeneralPanel, SETTINGS_TAB_GENERAL_ID],
+    [profileTabNotificationsBtn, profileNotificationsPanel, SETTINGS_TAB_NOTIFICATIONS_ID],
+  ];
+
+  for (const [button, panel, tabId] of tabBindings) {
+    const active = activeSettingsTabId === tabId;
+    if (button) {
+      button.classList.toggle("active", active);
+      button.setAttribute("aria-selected", String(active));
+      button.tabIndex = active ? 0 : -1;
+    }
+    if (panel) {
+      panel.classList.toggle("hidden", !active);
+    }
+  }
+}
+
+function loadStoredBooleanPreference(storageKey, defaultValue) {
+  try {
+    const raw = localStorage.getItem(storageKey);
+    if (raw === null) {
+      return defaultValue;
+    }
+    return raw === "1";
+  } catch {
+    return defaultValue;
+  }
+}
+
+function persistStoredBooleanPreference(storageKey, value) {
+  try {
+    localStorage.setItem(storageKey, value ? "1" : "0");
+  } catch {
+    // no-op
+  }
+}
+
+function loadNotificationsEnabledPreference() {
+  return loadStoredBooleanPreference(PROFILE_NOTIFICATIONS_ENABLED_STORAGE_KEY, true);
+}
+
+function persistNotificationsEnabledPreference() {
+  persistStoredBooleanPreference(PROFILE_NOTIFICATIONS_ENABLED_STORAGE_KEY, notificationsEnabled);
+}
+
+function loadNotificationsSavedRoomsPreference() {
+  return loadStoredBooleanPreference(PROFILE_NOTIFICATIONS_SAVED_STORAGE_KEY, true);
+}
+
+function persistNotificationsSavedRoomsPreference() {
+  persistStoredBooleanPreference(PROFILE_NOTIFICATIONS_SAVED_STORAGE_KEY, notificationsSavedRoomsEnabled);
+}
+
+function loadNotificationsMentionsPreference() {
+  return loadStoredBooleanPreference(PROFILE_NOTIFICATIONS_MENTIONS_STORAGE_KEY, true);
+}
+
+function persistNotificationsMentionsPreference() {
+  persistStoredBooleanPreference(PROFILE_NOTIFICATIONS_MENTIONS_STORAGE_KEY, notificationsMentionsEnabled);
+}
+
+function getExplicitProfileName() {
+  return String(nameInput?.value || "")
+    .trim()
+    .slice(0, 32);
+}
+
+function escapeRegExp(text) {
+  return String(text || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function formatNotificationTextPreview(text) {
+  const normalized = String(text || "").replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return t("notificationMessageFallback");
+  }
+  if (normalized.length <= 140) {
+    return normalized;
+  }
+  return `${normalized.slice(0, 137)}...`;
+}
+
+function messageMentionsCurrentProfile(message) {
+  if (!notificationsMentionsEnabled) {
+    return false;
+  }
+
+  const nickname = getExplicitProfileName();
+  if (!nickname) {
+    return false;
+  }
+
+  const text = String(message?.text || "").trim();
+  if (!text) {
+    return false;
+  }
+
+  const pattern = new RegExp(
+    `(^|[^\\p{L}\\p{N}_-])@${escapeRegExp(nickname)}(?=$|[^\\p{L}\\p{N}_-])`,
+    "iu"
+  );
+  return pattern.test(text);
+}
+
+function hasNotificationChannelEnabled() {
+  return notificationsEnabled && (notificationsSavedRoomsEnabled || notificationsMentionsEnabled);
+}
+
+function canUseDesktopNotifications() {
+  return Boolean(IS_ELECTRON_RUNTIME && desktopNotificationsSupported && hasNotificationChannelEnabled());
+}
+
+function shouldAttemptDesktopNotificationNow() {
+  return canUseDesktopNotifications() && (document.hidden || !document.hasFocus());
+}
+
+function syncNotificationControls() {
+  if (profileTabGeneralBtn) {
+    profileTabGeneralBtn.textContent = t("generalSettings");
+  }
+  if (profileTabNotificationsBtn) {
+    profileTabNotificationsBtn.textContent = t("notificationsSettings");
+  }
+  if (notificationsEnabledLabelEl) {
+    notificationsEnabledLabelEl.textContent = t("enableDesktopNotifications");
+  }
+  if (notificationsSavedLabelEl) {
+    notificationsSavedLabelEl.textContent = t("notifySavedServerMessages");
+  }
+  if (notificationsMentionsLabelEl) {
+    notificationsMentionsLabelEl.textContent = t("notifyMentions");
+  }
+  if (notificationsSupportNoteEl) {
+    notificationsSupportNoteEl.textContent = t("notificationElectronOnly");
+    notificationsSupportNoteEl.classList.toggle(
+      "hidden",
+      Boolean(IS_ELECTRON_RUNTIME && desktopNotificationsSupported)
+    );
+  }
+
+  const notificationsUnavailable = !IS_ELECTRON_RUNTIME || !desktopNotificationsSupported;
+  if (notificationsEnabledToggle) {
+    notificationsEnabledToggle.checked = notificationsEnabled;
+    notificationsEnabledToggle.disabled = notificationsUnavailable;
+  }
+  if (notificationsSavedToggle) {
+    notificationsSavedToggle.checked = notificationsSavedRoomsEnabled;
+    notificationsSavedToggle.disabled = notificationsUnavailable || !notificationsEnabled;
+  }
+  if (notificationsMentionsToggle) {
+    notificationsMentionsToggle.checked = notificationsMentionsEnabled;
+    notificationsMentionsToggle.disabled = notificationsUnavailable || !notificationsEnabled;
+  }
+}
+
+function trimNotificationStateToSavedRooms() {
+  const knownSavedRooms = new Set(savedRooms);
+  for (const roomId of Array.from(notificationCheckpoints.keys())) {
+    if (!knownSavedRooms.has(roomId)) {
+      notificationCheckpoints.delete(roomId);
+    }
+  }
+
+  if (notificationPreviewRoomId && !knownSavedRooms.has(notificationPreviewRoomId)) {
+    notificationPreviewRoomId = "";
+  }
+}
+
+function getNotificationCheckpoint(roomId) {
+  const cleanRoomId = normalizeRoomIdValue(roomId);
+  if (!cleanRoomId) {
+    return {
+      roomId: "",
+      lastSeenMessageId: "",
+      lastSeenCreatedAt: 0,
+    };
+  }
+
+  const stored = notificationCheckpoints.get(cleanRoomId);
+  if (stored) {
+    return {
+      roomId: cleanRoomId,
+      lastSeenMessageId: String(stored.lastSeenMessageId || ""),
+      lastSeenCreatedAt: Number(stored.lastSeenCreatedAt) || 0,
+    };
+  }
+
+  return {
+    roomId: cleanRoomId,
+    lastSeenMessageId: "",
+    lastSeenCreatedAt: 0,
+  };
+}
+
+function setNotificationCheckpoint(roomId, marker) {
+  const cleanRoomId = normalizeRoomIdValue(roomId);
+  if (!cleanRoomId || !marker) {
+    return;
+  }
+
+  const nextMessageId = String(marker.id || marker.lastSeenMessageId || marker.latestMessageId || "").trim();
+  const nextCreatedAt = Number(
+    marker.createdAt || marker.lastSeenCreatedAt || marker.latestCreatedAt || 0
+  );
+
+  if (!nextMessageId && (!Number.isFinite(nextCreatedAt) || nextCreatedAt <= 0)) {
+    return;
+  }
+
+  notificationCheckpoints.set(cleanRoomId, {
+    lastSeenMessageId: nextMessageId,
+    lastSeenCreatedAt: Number.isFinite(nextCreatedAt) && nextCreatedAt > 0
+      ? Math.round(nextCreatedAt)
+      : 0,
+  });
+}
+
+function seedNotificationCheckpointFromMessages(roomId, messages) {
+  const list = Array.isArray(messages) ? messages : [];
+  let latestMessage = null;
+
+  for (const message of list) {
+    const normalizedMessage = normalizeNotificationMessagePayload(message, roomId);
+    if (normalizedMessage) {
+      latestMessage = normalizedMessage;
+    }
+  }
+
+  if (latestMessage) {
+    setNotificationCheckpoint(roomId, latestMessage);
+  }
+}
+
+function normalizeNotificationMessagePayload(message, fallbackRoomId = "") {
+  if (!message || typeof message !== "object") {
+    return null;
+  }
+
+  const roomId = normalizeRoomIdValue(message.roomId || fallbackRoomId);
+  const messageId = String(message.id || "").trim();
+  if (!roomId || !messageId) {
+    return null;
+  }
+
+  const createdAt = Number(message.createdAt);
+  return {
+    roomId,
+    id: messageId,
+    userId: String(message.userId || "").trim(),
+    userName: String(message.userName || t("guest")).trim() || t("guest"),
+    text: String(message.text || "").replace(/\s+/g, " ").trim(),
+    createdAt: Number.isFinite(createdAt) && createdAt > 0 ? Math.round(createdAt) : Date.now(),
+  };
+}
+
+function rememberProcessedNotificationMessageId(messageId) {
+  const cleanMessageId = String(messageId || "").trim();
+  if (!cleanMessageId) {
+    return false;
+  }
+  if (processedNotificationMessageIdSet.has(cleanMessageId)) {
+    return false;
+  }
+
+  processedNotificationMessageIdSet.add(cleanMessageId);
+  processedNotificationMessageIds.push(cleanMessageId);
+
+  while (processedNotificationMessageIds.length > MAX_PROCESSED_NOTIFICATION_IDS) {
+    const removedId = processedNotificationMessageIds.shift();
+    if (removedId) {
+      processedNotificationMessageIdSet.delete(removedId);
+    }
+  }
+
+  return true;
+}
+
+function isOwnNotificationMessage(message) {
+  return Boolean(message?.userId && message.userId === CHAT_AUTHOR_ID);
+}
+
+function buildRealtimeNotificationPayload(message) {
+  const preview = formatNotificationTextPreview(message?.text);
+  const author = String(message?.userName || t("guest"));
+
+  if (messageMentionsCurrentProfile(message)) {
+    return {
+      title: t("notificationMentionTitle", { room: message.roomId }),
+      body: t("notificationMentionBody", {
+        author,
+        text: preview,
+      }),
+      kind: "mention",
+    };
+  }
+
+  if (!notificationsSavedRoomsEnabled) {
+    return null;
+  }
+
+  return {
+    title: t("notificationMessageTitle", {
+      room: message.roomId,
+      author,
+    }),
+    body: preview,
+    kind: "message",
+  };
+}
+
+function buildPollingNotificationPayload(roomId, messages) {
+  const visibleMessages = messages.filter((message) => !isOwnNotificationMessage(message));
+  if (visibleMessages.length === 0) {
+    return null;
+  }
+
+  const latestMention = notificationsMentionsEnabled
+    ? [...visibleMessages].reverse().find((message) => messageMentionsCurrentProfile(message))
+    : null;
+
+  if (latestMention) {
+    return {
+      title: t("notificationMentionTitle", { room: roomId }),
+      body: t("notificationMentionBody", {
+        author: latestMention.userName || t("guest"),
+        text: formatNotificationTextPreview(latestMention.text),
+      }),
+      kind: "mention",
+      messageId: latestMention.id,
+    };
+  }
+
+  if (!notificationsSavedRoomsEnabled) {
+    return null;
+  }
+
+  const lastMessage = visibleMessages[visibleMessages.length - 1];
+  return {
+    title: t("notificationSummaryTitle", { room: roomId }),
+    body: t("notificationSummaryBody", {
+      count: visibleMessages.length,
+      author: lastMessage.userName || t("guest"),
+      text: formatNotificationTextPreview(lastMessage.text),
+    }),
+    kind: "summary",
+    messageId: lastMessage.id,
+  };
+}
+
+async function dispatchDesktopNotification(payload) {
+  if (!shouldAttemptDesktopNotificationNow() || !window.desktopApp?.showDesktopNotification) {
+    return false;
+  }
+
+  try {
+    const result = await window.desktopApp.showDesktopNotification(payload);
+    return Boolean(result?.shown);
+  } catch {
+    return false;
+  }
+}
+
+function selectRoomFromNotification(roomId) {
+  const cleanRoomId = normalizeRoomIdValue(roomId);
+  if (!cleanRoomId) {
+    return;
+  }
+
+  notificationPreviewRoomId = cleanRoomId;
+  if (roomInput) {
+    roomInput.value = cleanRoomId;
+  }
+  if (!joined) {
+    updateRoomLabels(cleanRoomId);
+  }
+  renderSavedRooms();
+  setStatus(t("notificationSelectedServer", { room: cleanRoomId }));
+}
+
+async function handleRealtimeNotificationMessage(message, fallbackRoomId = "") {
+  const normalizedMessage = normalizeNotificationMessagePayload(message, fallbackRoomId);
+  if (!normalizedMessage) {
+    return;
+  }
+
+  setNotificationCheckpoint(normalizedMessage.roomId, normalizedMessage);
+  const isNewMessage = rememberProcessedNotificationMessageId(normalizedMessage.id);
+  if (!isNewMessage || isOwnNotificationMessage(normalizedMessage)) {
+    return;
+  }
+
+  const notificationPayload = buildRealtimeNotificationPayload(normalizedMessage);
+  if (!notificationPayload) {
+    return;
+  }
+
+  await dispatchDesktopNotification({
+    roomId: normalizedMessage.roomId,
+    messageId: normalizedMessage.id,
+    kind: notificationPayload.kind,
+    title: notificationPayload.title,
+    body: notificationPayload.body,
+  });
+}
+
+async function processNotificationPollRoomSnapshot(roomSnapshot) {
+  const roomId = normalizeRoomIdValue(roomSnapshot?.roomId);
+  if (!roomId) {
+    return;
+  }
+
+  const normalizedMessages = Array.isArray(roomSnapshot?.messages)
+    ? roomSnapshot.messages
+        .map((message) => normalizeNotificationMessagePayload(message, roomId))
+        .filter(Boolean)
+    : [];
+
+  if (normalizedMessages.length === 0) {
+    setNotificationCheckpoint(roomId, {
+      latestMessageId: roomSnapshot?.latestMessageId,
+      latestCreatedAt: roomSnapshot?.latestCreatedAt,
+    });
+    return;
+  }
+
+  const unseenMessages = [];
+  for (const message of normalizedMessages) {
+    if (rememberProcessedNotificationMessageId(message.id)) {
+      unseenMessages.push(message);
+    }
+  }
+
+  const latestMessage = normalizedMessages[normalizedMessages.length - 1];
+  setNotificationCheckpoint(roomId, latestMessage);
+
+  if (unseenMessages.length === 0) {
+    return;
+  }
+
+  const notificationPayload = buildPollingNotificationPayload(roomId, unseenMessages);
+  if (!notificationPayload) {
+    return;
+  }
+
+  await dispatchDesktopNotification({
+    roomId,
+    messageId: notificationPayload.messageId || latestMessage.id,
+    kind: notificationPayload.kind,
+    title: notificationPayload.title,
+    body: notificationPayload.body,
+  });
+}
+
+function getWatchedNotificationRoomIds() {
+  trimNotificationStateToSavedRooms();
+  if (!canUseDesktopNotifications()) {
+    return [];
+  }
+  return savedRooms
+    .map((roomId) => normalizeRoomIdValue(roomId))
+    .filter(Boolean)
+    .slice(0, MAX_SAVED_ROOMS);
+}
+
+function syncSavedRoomNotificationWatchList() {
+  socket.emit("watch-saved-rooms", {
+    roomIds: getWatchedNotificationRoomIds(),
+  });
+}
+
+function restartNotificationPolling() {
+  if (notificationPollTimerId) {
+    clearInterval(notificationPollTimerId);
+    notificationPollTimerId = null;
+  }
+
+  if (!canUseDesktopNotifications() || savedRooms.length === 0) {
+    return;
+  }
+
+  notificationPollTimerId = setInterval(() => {
+    void performNotificationSync();
+  }, NOTIFICATION_POLL_INTERVAL_MS);
+}
+
+async function performNotificationSync() {
+  if (!canUseDesktopNotifications() || notificationSyncInProgress) {
+    return;
+  }
+
+  const watchedRoomIds = getWatchedNotificationRoomIds();
+  if (watchedRoomIds.length === 0) {
+    return;
+  }
+
+  notificationSyncInProgress = true;
+
+  try {
+    const response = await fetch("/api/notifications/check", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        rooms: watchedRoomIds.map((roomId) => getNotificationCheckpoint(roomId)),
+      }),
+    });
+
+    if (!response.ok) {
+      return;
+    }
+
+    const payload = await response.json();
+    const roomSnapshots = Array.isArray(payload?.rooms) ? payload.rooms : [];
+    for (const roomSnapshot of roomSnapshots) {
+      await processNotificationPollRoomSnapshot(roomSnapshot);
+    }
+  } catch {
+    // no-op
+  } finally {
+    notificationSyncInProgress = false;
+  }
+}
+
+function refreshNotificationAutomation({ sync = false } = {}) {
+  syncNotificationControls();
+  syncSavedRoomNotificationWatchList();
+  restartNotificationPolling();
+
+  if (sync) {
+    void performNotificationSync();
+  }
+}
+
+async function initializeDesktopNotifications() {
+  if (!IS_ELECTRON_RUNTIME || !window.desktopApp?.notificationsSupported) {
+    desktopNotificationsSupported = false;
+    syncNotificationControls();
+    return;
+  }
+
+  try {
+    desktopNotificationsSupported = Boolean(await window.desktopApp.notificationsSupported());
+  } catch {
+    desktopNotificationsSupported = false;
+  }
+
+  if (desktopNotificationActivationCleanup) {
+    desktopNotificationActivationCleanup();
+  }
+
+  desktopNotificationActivationCleanup = window.desktopApp.onNotificationActivated((payload) => {
+    selectRoomFromNotification(payload?.roomId);
+  });
+
+  syncNotificationControls();
+  refreshNotificationAutomation({ sync: true });
+}
+
 function applyStaticTranslations() {
   document.title = `${getProjectName()} · ${t("pageTitle")}`;
   document.documentElement.setAttribute(
@@ -1563,6 +2188,7 @@ function applyStaticTranslations() {
   if (profileBackgroundLabelEl) {
     profileBackgroundLabelEl.textContent = t("backgroundAnimation");
   }
+  syncNotificationControls();
   renderPendingChatAttachments();
 }
 
@@ -2298,6 +2924,7 @@ function ensureSavedRoom(roomId) {
   }
 
   persistSavedRooms();
+  refreshNotificationAutomation({ sync: true });
 }
 
 function roomBadgeLabel(roomId) {
@@ -2322,6 +2949,7 @@ function renderSavedRooms() {
   const selectedRoomId = joined
     ? normalizeRoomIdValue(roomState?.id)
     : normalizeRoomIdValue(roomInput?.value);
+  const previewRoomId = joined ? normalizeRoomIdValue(notificationPreviewRoomId) : "";
 
   if (homeServerBtn) {
     homeServerBtn.classList.toggle("active", !joined);
@@ -2338,9 +2966,12 @@ function renderSavedRooms() {
 
     if (roomId === selectedRoomId) {
       button.classList.add("active");
+    } else if (roomId === previewRoomId) {
+      button.classList.add("notification-selected");
     }
 
     button.addEventListener("click", () => {
+      notificationPreviewRoomId = "";
       roomInput.value = roomId;
       updateRoomLabels(roomId);
       renderSavedRooms();
@@ -6696,6 +7327,7 @@ function resetSessionState() {
   isMuted = false;
   updateMuteButtonLabel();
   updateScreenButton();
+  notificationPreviewRoomId = "";
   if (roomInput) {
     roomInput.value = "";
   }
@@ -6723,6 +7355,8 @@ async function requestJoinRoom(targetRoomId = null) {
     setStatus(t("joinServerFirst"));
     return;
   }
+
+  notificationPreviewRoomId = "";
   persistProfileName();
   const name = getProfileName();
 
@@ -6911,6 +7545,7 @@ roomInput.addEventListener("input", () => {
 
 if (homeServerBtn) {
   homeServerBtn.addEventListener("click", async () => {
+    notificationPreviewRoomId = "";
     if (roomInput) {
       roomInput.value = "";
     }
@@ -6959,6 +7594,18 @@ if (profileCloseBtn) {
   });
 }
 
+if (profileTabGeneralBtn) {
+  profileTabGeneralBtn.addEventListener("click", () => {
+    setActiveSettingsTab(SETTINGS_TAB_GENERAL_ID);
+  });
+}
+
+if (profileTabNotificationsBtn) {
+  profileTabNotificationsBtn.addEventListener("click", () => {
+    setActiveSettingsTab(SETTINGS_TAB_NOTIFICATIONS_ID);
+  });
+}
+
 if (nameInput) {
   nameInput.addEventListener("input", () => {
     persistProfileName();
@@ -7002,6 +7649,30 @@ if (profileMotionSelect) {
 if (profileBackgroundSelect) {
   profileBackgroundSelect.addEventListener("change", () => {
     applyBackgroundAnimation(profileBackgroundSelect.value);
+  });
+}
+
+if (notificationsEnabledToggle) {
+  notificationsEnabledToggle.addEventListener("change", () => {
+    notificationsEnabled = Boolean(notificationsEnabledToggle.checked);
+    persistNotificationsEnabledPreference();
+    refreshNotificationAutomation({ sync: true });
+  });
+}
+
+if (notificationsSavedToggle) {
+  notificationsSavedToggle.addEventListener("change", () => {
+    notificationsSavedRoomsEnabled = Boolean(notificationsSavedToggle.checked);
+    persistNotificationsSavedRoomsPreference();
+    refreshNotificationAutomation({ sync: true });
+  });
+}
+
+if (notificationsMentionsToggle) {
+  notificationsMentionsToggle.addEventListener("change", () => {
+    notificationsMentionsEnabled = Boolean(notificationsMentionsToggle.checked);
+    persistNotificationsMentionsPreference();
+    refreshNotificationAutomation({ sync: true });
   });
 }
 
@@ -7287,6 +7958,7 @@ socket.on("joined-room", async ({ room, selfId: incomingSelfId }) => {
   selfId = incomingSelfId;
   roomState = room;
   joined = true;
+  notificationPreviewRoomId = "";
   setVoiceCueBaselineFromRoom(room);
 
   joinForm.classList.add("hidden");
@@ -7295,6 +7967,7 @@ socket.on("joined-room", async ({ room, selfId: incomingSelfId }) => {
   updateRoomLabels(room.id);
   renderVoiceChannels();
   replaceChatMessages(room.messages);
+  seedNotificationCheckpointFromMessages(room.id, room.messages);
   ensureSavedRoom(room.id);
   renderSavedRooms();
 
@@ -7313,6 +7986,10 @@ socket.on("joined-room", async ({ room, selfId: incomingSelfId }) => {
   renderParticipants();
   renderScreens();
   updateVoiceControlsAvailability();
+});
+
+socket.on("connect", () => {
+  refreshNotificationAutomation({ sync: true });
 });
 
 socket.on("room-state", async (room) => {
@@ -7440,6 +8117,11 @@ socket.on("peer-left", ({ peerId }) => {
 socket.on("chat-message", (message) => {
   upsertChatMessage(message);
   renderChat();
+  void handleRealtimeNotificationMessage(message, roomState?.id || "");
+});
+
+socket.on("saved-room-chat-message", ({ roomId, message } = {}) => {
+  void handleRealtimeNotificationMessage(message, roomId);
 });
 
 socket.on("chat-message-updated", (message) => {
@@ -7520,6 +8202,9 @@ preferredThemeId = loadPreferredThemeId();
 preferredLanguageId = loadPreferredLanguageId();
 preferredMotionProfileId = loadPreferredMotionProfileId();
 preferredBackgroundAnimationId = loadPreferredBackgroundAnimationId();
+notificationsEnabled = loadNotificationsEnabledPreference();
+notificationsSavedRoomsEnabled = loadNotificationsSavedRoomsPreference();
+notificationsMentionsEnabled = loadNotificationsMentionsPreference();
 applyTheme(preferredThemeId, { persist: false });
 applyLanguage(preferredLanguageId, { persist: false, rerender: false });
 applyMotionProfile(preferredMotionProfileId, { persist: false });
@@ -7529,10 +8214,12 @@ if (nameInput) {
   nameInput.value = loadStoredProfileName();
   persistProfileName();
 }
+setActiveSettingsTab(SETTINGS_TAB_GENERAL_ID);
 setProfilePanelOpen(false);
 micSensitivity = loadMicSensitivity();
 syncMicSensitivityUi();
 void refreshProfileDeviceSelectors();
+void initializeDesktopNotifications();
 
 if (hasOpusCodec && hasRedCodec) {
   console.info("Audio codec preference active: Opus + RED");

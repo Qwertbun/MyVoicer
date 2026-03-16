@@ -1361,6 +1361,19 @@ select:focus {
   transform: translateY(-50%) scaleY(1);
 }
 
+.server-icon.notification-selected:not(.active) {
+  border-color: color-mix(in srgb, var(--accent) 56%, transparent);
+  background: color-mix(in srgb, var(--server-icon-bg) 66%, var(--accent) 34%);
+  color: var(--text);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.server-icon.notification-selected:not(.active)::before {
+  opacity: 1;
+  height: 18px;
+  transform: translateY(-50%) scaleY(0.85);
+}
+
 .servers-divider {
   width: 34px;
   height: 2px;
@@ -2818,6 +2831,40 @@ ol.chat-welcome-list li::before {
   animation: panel-enter calc(var(--motion-slow) * 0.85) var(--motion-ease) both;
 }
 
+.profile-tabs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.profile-tab {
+  border: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--surface-soft) 84%, transparent);
+  color: var(--text-muted);
+  padding: 8px 10px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.profile-tab:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--surface-soft) 72%, var(--accent) 28%);
+}
+
+.profile-tab.active {
+  color: var(--text-inverse);
+  border-color: color-mix(in srgb, var(--accent) 56%, transparent);
+  background: linear-gradient(180deg, var(--accent), var(--accent-hover));
+}
+
+.profile-settings-panel {
+  display: grid;
+  gap: 8px;
+}
+
 .profile-panel-header {
   display: flex;
   align-items: center;
@@ -2863,6 +2910,44 @@ ol.chat-welcome-list li::before {
 
 .profile-field select {
   width: 100%;
+}
+
+.settings-toggle {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
+  background: color-mix(in srgb, var(--surface-soft) 86%, transparent);
+}
+
+.settings-toggle-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.settings-toggle-copy strong {
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.settings-toggle input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent);
+}
+
+.settings-note {
+  margin: 0;
+  padding: 9px 10px;
+  border-radius: 9px;
+  border: 1px dashed color-mix(in srgb, var(--line) 68%, transparent);
+  color: var(--text-soft);
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 @media (prefers-reduced-motion: reduce) {
