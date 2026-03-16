@@ -160,6 +160,10 @@ function normalizeNotificationTimestamp(value) {
   return Math.round(numeric);
 }
 
+function normalizeRoomIdValue(value) {
+  return String(value || "").trim().slice(0, 32);
+}
+
 function serializeNotificationMessage(message) {
   if (!message || typeof message !== "object") {
     return null;
