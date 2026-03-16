@@ -18,10 +18,18 @@ MVP voice messenger with server + voice-room host election:
 ## Run
 1. Install dependencies:
    npm install
-2. Start web server:
+2. Start backend (headless, works on Linux without screen):
    npm run start:web
 3. Open in browser:
    http://localhost:3000
+
+Additional backend modes:
+- `npm run start:web:p2p`
+- `npm run start:web:relay`
+- `npm run start:web:raw` (uses current `NETWORK_MODE` env or defaults to `server`)
+
+Windows-only legacy launcher with predefined TLS/TURN env:
+- `npm run start:web:ps1`
 
 ## Experimental P2P Network Mode
 This branch also contains an experimental backend transport mode that keeps the current runtime/UI

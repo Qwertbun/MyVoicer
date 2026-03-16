@@ -15,6 +15,7 @@ const DESKTOP_SETTINGS_FILE_NAME = "desktop-settings.json";
 const NETWORK_MODE_ENV_KEY = "NETWORK_MODE";
 const NETWORK_MODE_SERVER = "server";
 const NETWORK_MODE_P2P = "p2p";
+const NETWORK_MODE_RELAY = "relay";
 const BOOT_ENV_NETWORK_MODE_RAW = String(process.env[NETWORK_MODE_ENV_KEY] || "").trim();
 const P2P_BOOTSTRAP_ENV_KEYS = [
   "P2P_BOOTSTRAP",
@@ -109,9 +110,14 @@ function parseBootstrapNodes(value) {
 }
 
 function normalizeEmbeddedNetworkMode(value) {
-  return String(value || "").trim().toLowerCase() === NETWORK_MODE_P2P
-    ? NETWORK_MODE_P2P
-    : NETWORK_MODE_SERVER;
+  const clean = String(value || "").trim().toLowerCase();
+  if (clean === NETWORK_MODE_P2P) {
+    return NETWORK_MODE_P2P;
+  }
+  if (clean === NETWORK_MODE_RELAY) {
+    return NETWORK_MODE_RELAY;
+  }
+  return NETWORK_MODE_SERVER;
 }
 
 function hasExplicitEnvironmentNetworkMode() {

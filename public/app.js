@@ -148,7 +148,24 @@ const BACKGROUND_ANIMATION_MODES = [
 const NETWORK_MODES = [
   { id: "server", labelKey: "networkModeServer" },
   { id: "p2p", labelKey: "networkModeP2P" },
+  { id: "relay", labelKey: "networkModeRelay" },
 ];
+const NETWORK_MODE_RELAY_ID = "relay";
+const NETWORK_MODE_SERVER_ID = "server";
+const RELAY_CRYPTO_ALGORITHM = "AES-GCM-256";
+const RELAY_CIPHER_VERSION = 1;
+const RELAY_KDF_ITERATIONS = 250000;
+const RELAY_KDF_HASH = "SHA-256";
+const RELAY_HISTORY_REPLAY_LIMIT = 500;
+const RELAY_HISTORY_REPLAY_MAX_BYTES = 64 * 1024 * 1024;
+const RELAY_ATTACHMENT_CHUNK_SIZE = 256 * 1024;
+const RELAY_ATTACHMENT_REQUEST_TIMEOUT_MS = 8000;
+const RELAY_IDB_NAME = "qwerbentum_relay_v1";
+const RELAY_IDB_VERSION = 1;
+const RELAY_STORE_MESSAGES = "cipher_messages";
+const RELAY_STORE_ATTACHMENTS = "cipher_attachments";
+const RELAY_STORE_KEYS = "room_keys_meta";
+const RELAY_WRAPPING_KEY_META_ID = "wrapping-key";
 const SUPPORTED_SLAVIC_LANGUAGE_PREFIXES = [
   "sl",
   "sr",
@@ -221,12 +238,22 @@ const I18N = {
     networkMode: "Network mode",
     networkModeServer: "Integrated server",
     networkModeP2P: "P2P mesh",
+    networkModeRelay: "Relay (encrypted)",
     networkModeRestartHint: "Restart required after changing network mode.",
     networkModeElectronOnly: "Embedded network mode switching is available in Electron only.",
     networkModeRemoteLocked: "Embedded network mode is unavailable while a remote backend URL is configured.",
     networkModeEnvLocked: "Embedded network mode is controlled by the NETWORK_MODE environment variable.",
     networkModeRestartPrompt: "Switch network mode to {mode}? The app will restart.",
     networkModeChangeUnavailable: "Network mode cannot be changed in the current launch mode.",
+    relayAccessCodePrompt: "Enter room access code for #{room}",
+    relayAccessCodeRequired: "Room access code is required for encrypted relay mode.",
+    decryptFailed: "Unable to decrypt message. Check room access code.",
+    roomKeyRequired: "Encrypted relay room key is required.",
+    attachmentSourceUnavailable: "Attachment source is unavailable.",
+    encryptedAttachment: "Encrypted attachment",
+    downloadEncryptedAttachment: "Download encrypted attachment",
+    relayHistorySyncing: "Syncing encrypted history...",
+    relayHistorySynced: "Encrypted history synced.",
     generalSettings: "General",
     notificationsSettings: "Notifications",
     enableDesktopNotifications: "Enable desktop notifications",
@@ -429,12 +456,22 @@ const I18N = {
     networkMode: "Сетевой режим",
     networkModeServer: "Встроенный сервер",
     networkModeP2P: "P2P mesh",
+    networkModeRelay: "Relay (шифрованный)",
     networkModeRestartHint: "После смены сетевого режима приложение перезапустится.",
     networkModeElectronOnly: "Переключение встроенного сетевого режима доступно только в Electron.",
     networkModeRemoteLocked: "Встроенный сетевой режим недоступен, пока задан удалённый backend URL.",
     networkModeEnvLocked: "Встроенный сетевой режим управляется переменной окружения NETWORK_MODE.",
     networkModeRestartPrompt: "Переключить сетевой режим на {mode}? Приложение перезапустится.",
     networkModeChangeUnavailable: "В текущем режиме запуска сетевой режим изменить нельзя.",
+    relayAccessCodePrompt: "Введите код доступа комнаты для #{room}",
+    relayAccessCodeRequired: "Для шифрованного relay-режима нужен код доступа комнаты.",
+    decryptFailed: "Не удалось расшифровать сообщение. Проверьте код доступа комнаты.",
+    roomKeyRequired: "Нужен ключ шифрованной relay-комнаты.",
+    attachmentSourceUnavailable: "Источник вложения недоступен.",
+    encryptedAttachment: "Шифрованное вложение",
+    downloadEncryptedAttachment: "Скачать шифрованное вложение",
+    relayHistorySyncing: "Синхронизация шифрованной истории...",
+    relayHistorySynced: "Шифрованная история синхронизирована.",
     generalSettings: "Общие",
     notificationsSettings: "Уведомления",
     enableDesktopNotifications: "Включить desktop-уведомления",
@@ -1009,6 +1046,7 @@ let preferredLanguageId = DEFAULT_LANGUAGE_ID;
 let preferredMotionProfileId = DEFAULT_MOTION_PROFILE_ID;
 let preferredBackgroundAnimationId = DEFAULT_BACKGROUND_ANIMATION_ID;
 let preferredNetworkModeId = DEFAULT_NETWORK_MODE_ID;
+let activeBackendNetworkMode = NETWORK_MODE_SERVER_ID;
 let activeSettingsTabId = SETTINGS_TAB_GENERAL_ID;
 let notificationPreviewRoomId = "";
 let desktopNotificationsSupported = false;
@@ -1020,6 +1058,12 @@ let notificationsMentionsEnabled = true;
 let notificationPollTimerId = null;
 let notificationSyncInProgress = false;
 let desktopNotificationActivationCleanup = null;
+let relayDatabasePromise = null;
+let relayKeyReadyPromiseByRoom = new Map();
+const relayRoomKeyCache = new Map();
+const relayMessageEnvelopeCache = new Map();
+const relayAttachmentSourceMap = new Map();
+const relayAttachmentRequestMap = new Map();
 
 const peers = new Map();
 const sourceMedia = new Map();
@@ -1533,13 +1577,25 @@ function applyBackgroundAnimation(backgroundAnimationId, { persist = true } = {}
 }
 
 function normalizeNetworkModeId(value) {
-  return String(value || "").trim().toLowerCase() === "p2p" ? "p2p" : DEFAULT_NETWORK_MODE_ID;
+  const clean = String(value || "").trim().toLowerCase();
+  if (clean === "p2p") {
+    return "p2p";
+  }
+  if (clean === NETWORK_MODE_RELAY_ID) {
+    return NETWORK_MODE_RELAY_ID;
+  }
+  return DEFAULT_NETWORK_MODE_ID;
 }
 
 function getNetworkModeLabel(networkModeId) {
-  return t(
-    normalizeNetworkModeId(networkModeId) === "p2p" ? "networkModeP2P" : "networkModeServer"
-  );
+  const normalized = normalizeNetworkModeId(networkModeId);
+  if (normalized === "p2p") {
+    return t("networkModeP2P");
+  }
+  if (normalized === NETWORK_MODE_RELAY_ID) {
+    return t("networkModeRelay");
+  }
+  return t("networkModeServer");
 }
 
 function getNetworkModeNoteText() {
@@ -1602,6 +1658,650 @@ async function initializeNetworkModeSetting() {
   }
 
   syncNetworkModeSelector();
+}
+
+function isRelayModeActive() {
+  return normalizeNetworkModeId(activeBackendNetworkMode) === NETWORK_MODE_RELAY_ID;
+}
+
+function createRelayRequestId(prefix = "relay") {
+  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function estimatePayloadSize(value) {
+  try {
+    return new TextEncoder().encode(JSON.stringify(value ?? null)).length;
+  } catch {
+    return 0;
+  }
+}
+
+function arrayBufferToBase64(buffer) {
+  const bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    const chunk = bytes.subarray(offset, offset + chunkSize);
+    binary += String.fromCharCode(...chunk);
+  }
+  return btoa(binary);
+}
+
+function base64ToUint8Array(base64Value) {
+  const text = String(base64Value || "").trim();
+  if (!text) {
+    return new Uint8Array(0);
+  }
+  const binary = atob(text);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return bytes;
+}
+
+function normalizeRelayEnvelopeShape(envelope, fallbackRoomId = "") {
+  if (!envelope || typeof envelope !== "object") {
+    return null;
+  }
+
+  const roomId = normalizeRoomIdValue(envelope.roomId || fallbackRoomId);
+  const messageId = String(envelope.messageId || "").trim().slice(0, 96);
+  const senderId = String(envelope.senderId || "").trim().slice(0, 96);
+  const iv = String(envelope.iv || "").trim().slice(0, 128);
+  const ciphertext = String(envelope.ciphertext || "").trim();
+  const createdAt = Number(envelope.createdAt);
+  const alg = String(envelope.alg || "").trim();
+  const v = Number(envelope.v);
+
+  if (!roomId || !messageId || !senderId || !iv || !ciphertext) {
+    return null;
+  }
+  if (alg !== RELAY_CRYPTO_ALGORITHM || v !== RELAY_CIPHER_VERSION) {
+    return null;
+  }
+  if (!Number.isFinite(createdAt) || createdAt <= 0) {
+    return null;
+  }
+
+  const attachmentRefs = Array.isArray(envelope.attachmentRefs)
+    ? envelope.attachmentRefs
+        .map((item) => ({
+          messageId: String(item?.messageId || "").trim().slice(0, 96),
+          attachmentId: String(item?.attachmentId || "").trim().slice(0, 96),
+          name: String(item?.name || "").trim().slice(0, 120),
+          mimeType: normalizeChatAttachmentMimeType(item?.mimeType),
+          size: Number.isFinite(Number(item?.size)) ? Math.max(0, Math.round(Number(item.size))) : 0,
+        }))
+        .filter((item) => item.messageId && item.attachmentId)
+        .slice(0, MAX_CHAT_ATTACHMENTS)
+    : [];
+
+  return {
+    v: RELAY_CIPHER_VERSION,
+    alg: RELAY_CRYPTO_ALGORITHM,
+    roomId,
+    messageId,
+    senderId,
+    createdAt: Math.round(createdAt),
+    iv,
+    ciphertext,
+    attachmentRefs,
+  };
+}
+
+function normalizeRelayAttachmentPayloadShape(payload, fallbackMessageId = "") {
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+
+  const messageId = String(payload.messageId || fallbackMessageId || "").trim().slice(0, 96);
+  const attachmentId = String(payload.attachmentId || "").trim().slice(0, 96);
+  const iv = String(payload.iv || "").trim().slice(0, 128);
+  const ciphertext = String(payload.ciphertext || "").trim();
+  const name = String(payload.name || "file").trim().slice(0, 120) || "file";
+  const mimeType = normalizeChatAttachmentMimeType(payload.mimeType);
+  const size = Number.isFinite(Number(payload.size)) ? Math.max(0, Math.round(Number(payload.size))) : 0;
+
+  if (!messageId || !attachmentId || !iv || !ciphertext) {
+    return null;
+  }
+
+  return {
+    messageId,
+    attachmentId,
+    iv,
+    ciphertext,
+    name,
+    mimeType,
+    size,
+  };
+}
+
+function getRelayAttachmentSourceKey(roomId, messageId, attachmentId) {
+  return `${roomId}::${messageId}::${attachmentId}`;
+}
+
+function registerRelayAttachmentSource(roomId, messageId, attachmentId, sourceId) {
+  const cleanRoomId = normalizeRoomIdValue(roomId);
+  const cleanMessageId = String(messageId || "").trim();
+  const cleanAttachmentId = String(attachmentId || "").trim();
+  const cleanSourceId = String(sourceId || "").trim();
+  if (!cleanRoomId || !cleanMessageId || !cleanAttachmentId || !cleanSourceId) {
+    return;
+  }
+
+  const key = getRelayAttachmentSourceKey(cleanRoomId, cleanMessageId, cleanAttachmentId);
+  const existing = relayAttachmentSourceMap.get(key);
+  if (existing instanceof Set) {
+    existing.add(cleanSourceId);
+    return;
+  }
+  relayAttachmentSourceMap.set(key, new Set([cleanSourceId]));
+}
+
+function getRelayAttachmentSources(roomId, messageId, attachmentId) {
+  const key = getRelayAttachmentSourceKey(roomId, messageId, attachmentId);
+  const known = relayAttachmentSourceMap.get(key);
+  if (!(known instanceof Set)) {
+    return [];
+  }
+  return Array.from(known).filter(Boolean);
+}
+
+function openRelayDatabase() {
+  if (relayDatabasePromise) {
+    return relayDatabasePromise;
+  }
+
+  relayDatabasePromise = new Promise((resolve, reject) => {
+    if (typeof indexedDB === "undefined") {
+      reject(new Error("IndexedDBUnavailable"));
+      return;
+    }
+
+    const request = indexedDB.open(RELAY_IDB_NAME, RELAY_IDB_VERSION);
+    request.onerror = () => {
+      reject(request.error || new Error("IndexedDBOpenFailed"));
+    };
+    request.onupgradeneeded = () => {
+      const db = request.result;
+
+      if (!db.objectStoreNames.contains(RELAY_STORE_MESSAGES)) {
+        const store = db.createObjectStore(RELAY_STORE_MESSAGES, { keyPath: "pk" });
+        store.createIndex("roomId", "roomId", { unique: false });
+        store.createIndex("roomCreatedAt", ["roomId", "createdAt"], { unique: false });
+      }
+
+      if (!db.objectStoreNames.contains(RELAY_STORE_ATTACHMENTS)) {
+        const store = db.createObjectStore(RELAY_STORE_ATTACHMENTS, { keyPath: "pk" });
+        store.createIndex("roomAttachment", ["roomId", "attachmentId"], { unique: true });
+        store.createIndex("roomMessage", ["roomId", "messageId"], { unique: false });
+      }
+
+      if (!db.objectStoreNames.contains(RELAY_STORE_KEYS)) {
+        db.createObjectStore(RELAY_STORE_KEYS, { keyPath: "key" });
+      }
+    };
+    request.onsuccess = () => {
+      resolve(request.result);
+    };
+  });
+
+  return relayDatabasePromise;
+}
+
+async function relayDbPut(storeName, value) {
+  const db = await openRelayDatabase();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(storeName, "readwrite");
+    const store = transaction.objectStore(storeName);
+    const request = store.put(value);
+    request.onerror = () => reject(request.error || new Error("IndexedDBPutFailed"));
+    request.onsuccess = () => resolve(request.result);
+  });
+}
+
+async function relayDbGet(storeName, key) {
+  const db = await openRelayDatabase();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(storeName, "readonly");
+    const store = transaction.objectStore(storeName);
+    const request = store.get(key);
+    request.onerror = () => reject(request.error || new Error("IndexedDBGetFailed"));
+    request.onsuccess = () => resolve(request.result || null);
+  });
+}
+
+async function relayDbDelete(storeName, key) {
+  const db = await openRelayDatabase();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(storeName, "readwrite");
+    const store = transaction.objectStore(storeName);
+    const request = store.delete(key);
+    request.onerror = () => reject(request.error || new Error("IndexedDBDeleteFailed"));
+    request.onsuccess = () => resolve();
+  });
+}
+
+function relayMessagePk(roomId, messageId) {
+  return `${roomId}::${messageId}`;
+}
+
+function relayAttachmentPk(roomId, attachmentId) {
+  return `${roomId}::${attachmentId}`;
+}
+
+async function loadRelayEnvelopeRecords(roomId, limit = RELAY_HISTORY_REPLAY_LIMIT) {
+  const cleanRoomId = normalizeRoomIdValue(roomId);
+  if (!cleanRoomId) {
+    return [];
+  }
+
+  const db = await openRelayDatabase();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(RELAY_STORE_MESSAGES, "readonly");
+    const store = transaction.objectStore(RELAY_STORE_MESSAGES);
+    const index = store.index("roomCreatedAt");
+    const range = IDBKeyRange.bound([cleanRoomId, 0], [cleanRoomId, Number.MAX_SAFE_INTEGER]);
+    const request = index.openCursor(range, "prev");
+    const result = [];
+
+    request.onerror = () => reject(request.error || new Error("IndexedDBCursorFailed"));
+    request.onsuccess = () => {
+      const cursor = request.result;
+      if (!cursor || result.length >= limit) {
+        resolve(result.reverse());
+        return;
+      }
+
+      result.push(cursor.value);
+      cursor.continue();
+    };
+  });
+}
+
+async function storeRelayEnvelopeRecord(roomId, envelope, sourceId = "") {
+  const cleanRoomId = normalizeRoomIdValue(roomId);
+  const normalizedEnvelope = normalizeRelayEnvelopeShape(envelope, cleanRoomId);
+  if (!cleanRoomId || !normalizedEnvelope) {
+    return;
+  }
+
+  await relayDbPut(RELAY_STORE_MESSAGES, {
+    pk: relayMessagePk(cleanRoomId, normalizedEnvelope.messageId),
+    roomId: cleanRoomId,
+    messageId: normalizedEnvelope.messageId,
+    createdAt: normalizedEnvelope.createdAt,
+    sourceId: String(sourceId || "").trim(),
+    envelope: normalizedEnvelope,
+    savedAt: Date.now(),
+  });
+}
+
+async function storeRelayAttachmentCipher(roomId, payload) {
+  const cleanRoomId = normalizeRoomIdValue(roomId);
+  const normalized = normalizeRelayAttachmentPayloadShape(payload);
+  if (!cleanRoomId || !normalized) {
+    return;
+  }
+
+  await relayDbPut(RELAY_STORE_ATTACHMENTS, {
+    pk: relayAttachmentPk(cleanRoomId, normalized.attachmentId),
+    roomId: cleanRoomId,
+    messageId: normalized.messageId,
+    attachmentId: normalized.attachmentId,
+    iv: normalized.iv,
+    ciphertext: normalized.ciphertext,
+    name: normalized.name,
+    mimeType: normalized.mimeType,
+    size: normalized.size,
+    savedAt: Date.now(),
+  });
+}
+
+async function loadRelayAttachmentCipher(roomId, attachmentId) {
+  const cleanRoomId = normalizeRoomIdValue(roomId);
+  const cleanAttachmentId = String(attachmentId || "").trim();
+  if (!cleanRoomId || !cleanAttachmentId) {
+    return null;
+  }
+  return relayDbGet(RELAY_STORE_ATTACHMENTS, relayAttachmentPk(cleanRoomId, cleanAttachmentId));
+}
+
+async function deleteRelayMessageRecord(roomId, messageId) {
+  const cleanRoomId = normalizeRoomIdValue(roomId);
+  const cleanMessageId = String(messageId || "").trim();
+  if (!cleanRoomId || !cleanMessageId) {
+    return;
+  }
+
+  await relayDbDelete(RELAY_STORE_MESSAGES, relayMessagePk(cleanRoomId, cleanMessageId));
+  const db = await openRelayDatabase();
+  await new Promise((resolve, reject) => {
+    const transaction = db.transaction(RELAY_STORE_ATTACHMENTS, "readwrite");
+    const store = transaction.objectStore(RELAY_STORE_ATTACHMENTS);
+    const index = store.index("roomMessage");
+    const range = IDBKeyRange.only([cleanRoomId, cleanMessageId]);
+    const request = index.openCursor(range);
+
+    request.onerror = () => reject(request.error || new Error("IndexedDBCursorFailed"));
+    request.onsuccess = () => {
+      const cursor = request.result;
+      if (!cursor) {
+        resolve();
+        return;
+      }
+      cursor.delete();
+      cursor.continue();
+    };
+  });
+
+  const sourcePrefix = `${cleanRoomId}::${cleanMessageId}::`;
+  for (const key of Array.from(relayAttachmentSourceMap.keys())) {
+    if (key.startsWith(sourcePrefix)) {
+      relayAttachmentSourceMap.delete(key);
+    }
+  }
+}
+
+async function getRelayWrappingKey() {
+  const existing = await relayDbGet(RELAY_STORE_KEYS, RELAY_WRAPPING_KEY_META_ID);
+  if (
+    typeof CryptoKey !== "undefined"
+    && existing?.cryptoKey instanceof CryptoKey
+  ) {
+    return existing.cryptoKey;
+  }
+
+  const cryptoKey = await crypto.subtle.generateKey(
+    {
+      name: "AES-GCM",
+      length: 256,
+    },
+    false,
+    ["wrapKey", "unwrapKey"]
+  );
+
+  await relayDbPut(RELAY_STORE_KEYS, {
+    key: RELAY_WRAPPING_KEY_META_ID,
+    cryptoKey,
+    createdAt: Date.now(),
+  });
+
+  return cryptoKey;
+}
+
+function relayRoomWrappedKeyMetaId(roomId) {
+  return `room-wrap:${roomId}`;
+}
+
+async function persistWrappedRelayRoomKey(roomId, roomKey) {
+  const cleanRoomId = normalizeRoomIdValue(roomId);
+  if (
+    !cleanRoomId
+    || typeof CryptoKey === "undefined"
+    || !(roomKey instanceof CryptoKey)
+  ) {
+    return;
+  }
+
+  const wrappingKey = await getRelayWrappingKey();
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const wrapped = await crypto.subtle.wrapKey(
+    "raw",
+    roomKey,
+    wrappingKey,
+    {
+      name: "AES-GCM",
+      iv,
+    }
+  );
+
+  await relayDbPut(RELAY_STORE_KEYS, {
+    key: relayRoomWrappedKeyMetaId(cleanRoomId),
+    roomId: cleanRoomId,
+    iv: arrayBufferToBase64(iv),
+    wrappedKey: arrayBufferToBase64(wrapped),
+    updatedAt: Date.now(),
+  });
+}
+
+async function loadWrappedRelayRoomKey(roomId) {
+  const cleanRoomId = normalizeRoomIdValue(roomId);
+  if (!cleanRoomId) {
+    return null;
+  }
+
+  const wrapped = await relayDbGet(RELAY_STORE_KEYS, relayRoomWrappedKeyMetaId(cleanRoomId));
+  if (!wrapped?.wrappedKey || !wrapped?.iv) {
+    return null;
+  }
+
+  const wrappingKey = await getRelayWrappingKey();
+  try {
+    return await crypto.subtle.unwrapKey(
+      "raw",
+      base64ToUint8Array(wrapped.wrappedKey),
+      wrappingKey,
+      {
+        name: "AES-GCM",
+        iv: base64ToUint8Array(wrapped.iv),
+      },
+      {
+        name: "AES-GCM",
+        length: 256,
+      },
+      true,
+      ["encrypt", "decrypt"]
+    );
+  } catch {
+    await relayDbDelete(RELAY_STORE_KEYS, relayRoomWrappedKeyMetaId(cleanRoomId));
+    return null;
+  }
+}
+
+async function deriveRelayRoomKey(roomId, accessCode) {
+  const cleanRoomId = normalizeRoomIdValue(roomId);
+  const cleanAccessCode = String(accessCode || "").trim();
+  if (!cleanRoomId || !cleanAccessCode) {
+    return null;
+  }
+
+  const encoder = new TextEncoder();
+  const baseKey = await crypto.subtle.importKey(
+    "raw",
+    encoder.encode(cleanAccessCode),
+    { name: "PBKDF2" },
+    false,
+    ["deriveKey"]
+  );
+
+  return crypto.subtle.deriveKey(
+    {
+      name: "PBKDF2",
+      hash: RELAY_KDF_HASH,
+      iterations: RELAY_KDF_ITERATIONS,
+      salt: encoder.encode(`qwerbentum-relay-v1:${cleanRoomId}`),
+    },
+    baseKey,
+    {
+      name: "AES-GCM",
+      length: 256,
+    },
+    true,
+    ["encrypt", "decrypt"]
+  );
+}
+
+async function requestRelayRoomAccessCode(roomId) {
+  const accessCode = await promptInput(
+    t("relayAccessCodePrompt", {
+      room: roomId,
+    }),
+    ""
+  );
+  if (accessCode === null) {
+    return "";
+  }
+  return String(accessCode || "").trim();
+}
+
+async function ensureRelayRoomKey(roomId, { forcePrompt = false } = {}) {
+  const cleanRoomId = normalizeRoomIdValue(roomId);
+  if (!cleanRoomId) {
+    return null;
+  }
+
+  if (!forcePrompt && relayRoomKeyCache.has(cleanRoomId)) {
+    return relayRoomKeyCache.get(cleanRoomId);
+  }
+
+  if (!forcePrompt && relayKeyReadyPromiseByRoom.has(cleanRoomId)) {
+    return relayKeyReadyPromiseByRoom.get(cleanRoomId);
+  }
+
+  const task = (async () => {
+    if (!forcePrompt) {
+      const cachedKey = await loadWrappedRelayRoomKey(cleanRoomId).catch(() => null);
+      if (cachedKey) {
+        relayRoomKeyCache.set(cleanRoomId, cachedKey);
+        return cachedKey;
+      }
+    }
+
+    const accessCode = await requestRelayRoomAccessCode(cleanRoomId);
+    if (!accessCode) {
+      setStatus(t("relayAccessCodeRequired"));
+      return null;
+    }
+
+    const derivedKey = await deriveRelayRoomKey(cleanRoomId, accessCode);
+    if (!derivedKey) {
+      setStatus(t("roomKeyRequired"));
+      return null;
+    }
+
+    relayRoomKeyCache.set(cleanRoomId, derivedKey);
+    await persistWrappedRelayRoomKey(cleanRoomId, derivedKey).catch(() => {
+      // no-op
+    });
+    return derivedKey;
+  })();
+
+  relayKeyReadyPromiseByRoom.set(cleanRoomId, task);
+  try {
+    return await task;
+  } finally {
+    relayKeyReadyPromiseByRoom.delete(cleanRoomId);
+  }
+}
+
+async function encryptRelayPayload(roomId, payload) {
+  const cleanRoomId = normalizeRoomIdValue(roomId);
+  const roomKey = await ensureRelayRoomKey(cleanRoomId);
+  if (!roomKey) {
+    throw new Error("room_key_required");
+  }
+
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const encoder = new TextEncoder();
+  const ciphertext = await crypto.subtle.encrypt(
+    {
+      name: "AES-GCM",
+      iv,
+    },
+    roomKey,
+    encoder.encode(JSON.stringify(payload ?? null))
+  );
+
+  return {
+    iv: arrayBufferToBase64(iv),
+    ciphertext: arrayBufferToBase64(ciphertext),
+  };
+}
+
+async function decryptRelayPayload(roomId, ivBase64, ciphertextBase64) {
+  const cleanRoomId = normalizeRoomIdValue(roomId);
+  const roomKey = await ensureRelayRoomKey(cleanRoomId);
+  if (!roomKey) {
+    throw new Error("room_key_required");
+  }
+
+  const plaintext = await crypto.subtle.decrypt(
+    {
+      name: "AES-GCM",
+      iv: base64ToUint8Array(ivBase64),
+    },
+    roomKey,
+    base64ToUint8Array(ciphertextBase64)
+  );
+
+  const decoder = new TextDecoder();
+  return JSON.parse(decoder.decode(plaintext));
+}
+
+async function encryptRelayAttachmentPayload(roomId, attachment) {
+  const cleanRoomId = normalizeRoomIdValue(roomId);
+  const roomKey = await ensureRelayRoomKey(cleanRoomId);
+  if (!roomKey) {
+    throw new Error("room_key_required");
+  }
+
+  const buffer = await attachment.file.arrayBuffer();
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ciphertext = await crypto.subtle.encrypt(
+    {
+      name: "AES-GCM",
+      iv,
+    },
+    roomKey,
+    buffer
+  );
+
+  return {
+    iv: arrayBufferToBase64(iv),
+    ciphertext: arrayBufferToBase64(ciphertext),
+  };
+}
+
+async function decryptRelayAttachmentToBlob(roomId, attachmentCipher) {
+  const cleanRoomId = normalizeRoomIdValue(roomId);
+  const roomKey = await ensureRelayRoomKey(cleanRoomId);
+  if (!roomKey) {
+    throw new Error("room_key_required");
+  }
+
+  const plaintext = await crypto.subtle.decrypt(
+    {
+      name: "AES-GCM",
+      iv: base64ToUint8Array(attachmentCipher.iv),
+    },
+    roomKey,
+    base64ToUint8Array(attachmentCipher.ciphertext)
+  );
+
+  return new Blob([plaintext], {
+    type: normalizeChatAttachmentMimeType(attachmentCipher.mimeType),
+  });
+}
+
+async function fetchBackendNetworkMode() {
+  try {
+    const response = await fetch("/api/network-mode", {
+      cache: "no-store",
+    });
+    if (!response.ok) {
+      return;
+    }
+
+    const payload = await response.json();
+    activeBackendNetworkMode = normalizeNetworkModeId(payload?.mode);
+  } catch {
+    activeBackendNetworkMode = normalizeNetworkModeId(preferredNetworkModeId);
+  }
+
+  return activeBackendNetworkMode;
 }
 
 function normalizeSettingsTabId(value) {
@@ -2069,7 +2769,7 @@ async function processNotificationPollRoomSnapshot(roomSnapshot) {
 
 function getWatchedNotificationRoomIds() {
   trimNotificationStateToSavedRooms();
-  if (!canUseDesktopNotifications()) {
+  if (!canUseDesktopNotifications() || isRelayModeActive()) {
     return [];
   }
   return savedRooms
@@ -2090,7 +2790,7 @@ function restartNotificationPolling() {
     notificationPollTimerId = null;
   }
 
-  if (!canUseDesktopNotifications() || savedRooms.length === 0) {
+  if (!canUseDesktopNotifications() || isRelayModeActive() || savedRooms.length === 0) {
     return;
   }
 
@@ -2100,7 +2800,7 @@ function restartNotificationPolling() {
 }
 
 async function performNotificationSync() {
-  if (!canUseDesktopNotifications() || notificationSyncInProgress) {
+  if (!canUseDesktopNotifications() || isRelayModeActive() || notificationSyncInProgress) {
     return;
   }
 
@@ -2143,12 +2843,14 @@ function refreshNotificationAutomation({ sync = false } = {}) {
   syncSavedRoomNotificationWatchList();
   restartNotificationPolling();
 
-  if (sync) {
+  if (sync && !isRelayModeActive()) {
     void performNotificationSync();
   }
 }
 
 async function initializeDesktopNotifications() {
+  await fetchBackendNetworkMode();
+
   if (!IS_ELECTRON_RUNTIME || !window.desktopApp?.notificationsSupported) {
     desktopNotificationsSupported = false;
     syncNotificationControls();
@@ -3170,17 +3872,21 @@ function normalizeIncomingChatAttachment(attachment, index) {
   const size = Number(attachment.size);
   const normalizedSize = Number.isFinite(size) && size > 0 ? Math.round(size) : 0;
   const url = String(attachment.url || "").trim();
-  if (!url || !(url.startsWith("/") || /^https?:\/\//i.test(url))) {
+  const encrypted = Boolean(attachment.encrypted);
+  if (!encrypted && (!url || !(url.startsWith("/") || /^https?:\/\//i.test(url)))) {
     return null;
   }
 
   return {
     id: String(attachment.id || `${Date.now()}-${index}`),
+    messageId: String(attachment.messageId || "").trim().slice(0, 96),
+    roomId: normalizeRoomIdValue(attachment.roomId),
     name,
     mimeType,
     size: normalizedSize,
-    url,
+    url: encrypted ? url : url,
     previewKind: getChatAttachmentPreviewKind(mimeType),
+    encrypted,
   };
 }
 
@@ -3218,6 +3924,7 @@ function normalizeIncomingChatMessage(message) {
 
   return {
     id: String(message.id),
+    roomId: normalizeRoomIdValue(message.roomId || roomState?.id),
     userId: String(message.userId || ""),
     userName: String(message.userName || t("guest")),
     text: normalizedText,
@@ -3227,14 +3934,594 @@ function normalizeIncomingChatMessage(message) {
   };
 }
 
+function createRelayAttachmentViewModel(roomId, messageId, attachmentMeta) {
+  const cleanRoomId = normalizeRoomIdValue(roomId);
+  const cleanMessageId = String(messageId || "").trim();
+  const cleanAttachmentId = String(attachmentMeta?.attachmentId || "").trim();
+  const mimeType = normalizeChatAttachmentMimeType(attachmentMeta?.mimeType);
+  const previewKind = getChatAttachmentPreviewKind(mimeType);
+
+  return {
+    id: cleanAttachmentId || `${cleanMessageId}-attachment`,
+    messageId: cleanMessageId,
+    roomId: cleanRoomId,
+    name: String(attachmentMeta?.name || t("encryptedAttachment")).trim().slice(0, 120) || t("encryptedAttachment"),
+    mimeType,
+    size: Number.isFinite(Number(attachmentMeta?.size))
+      ? Math.max(0, Math.round(Number(attachmentMeta.size)))
+      : 0,
+    url: "",
+    previewKind,
+    encrypted: true,
+  };
+}
+
+async function hydrateRelayAttachmentUrl(roomId, messageId, attachmentId) {
+  const message = getChatMessageById(messageId);
+  if (!message || !Array.isArray(message.attachments)) {
+    return false;
+  }
+
+  const attachment = message.attachments.find((item) => String(item?.id || "") === String(attachmentId || "").trim());
+  if (!attachment) {
+    return false;
+  }
+
+  if (attachment.url) {
+    return true;
+  }
+
+  const cipherRecord = await loadRelayAttachmentCipher(roomId, attachment.id);
+  if (!cipherRecord) {
+    return false;
+  }
+
+  try {
+    const blob = await decryptRelayAttachmentToBlob(roomId, cipherRecord);
+    attachment.url = URL.createObjectURL(blob);
+    attachment.previewKind = getChatAttachmentPreviewKind(cipherRecord.mimeType);
+    attachment.encrypted = true;
+    return true;
+  } catch {
+    setStatus(t("decryptFailed"));
+    return false;
+  }
+}
+
+async function storeRelayAttachmentPayloads(roomId, payloads = [], sourceId = "") {
+  const cleanRoomId = normalizeRoomIdValue(roomId);
+  if (!cleanRoomId) {
+    return;
+  }
+
+  for (const payload of payloads) {
+    const normalized = normalizeRelayAttachmentPayloadShape(payload);
+    if (!normalized) {
+      continue;
+    }
+
+    await storeRelayAttachmentCipher(cleanRoomId, normalized);
+    registerRelayAttachmentSource(
+      cleanRoomId,
+      normalized.messageId,
+      normalized.attachmentId,
+      sourceId
+    );
+  }
+}
+
+async function decryptRelayEnvelopeToMessage(envelope, sourceId = "") {
+  const normalizedEnvelope = normalizeRelayEnvelopeShape(envelope);
+  if (!normalizedEnvelope) {
+    return null;
+  }
+
+  let decrypted = null;
+  try {
+    decrypted = await decryptRelayPayload(
+      normalizedEnvelope.roomId,
+      normalizedEnvelope.iv,
+      normalizedEnvelope.ciphertext
+    );
+  } catch {
+    setStatus(t("decryptFailed"));
+    return null;
+  }
+
+  const payload = decrypted && typeof decrypted === "object" ? decrypted : {};
+  const attachments = Array.isArray(normalizedEnvelope.attachmentRefs)
+    ? normalizedEnvelope.attachmentRefs.map((item) => createRelayAttachmentViewModel(
+      normalizedEnvelope.roomId,
+      normalizedEnvelope.messageId,
+      item
+    ))
+    : [];
+
+  for (const attachment of attachments) {
+    registerRelayAttachmentSource(
+      normalizedEnvelope.roomId,
+      normalizedEnvelope.messageId,
+      attachment.id,
+      sourceId || normalizedEnvelope.senderId
+    );
+    await hydrateRelayAttachmentUrl(
+      normalizedEnvelope.roomId,
+      normalizedEnvelope.messageId,
+      attachment.id
+    );
+  }
+
+  return {
+    id: normalizedEnvelope.messageId,
+    roomId: normalizedEnvelope.roomId,
+    userId: String(payload.userId || normalizedEnvelope.senderId || ""),
+    userName: String(payload.userName || t("guest")).trim() || t("guest"),
+    text: String(payload.text || ""),
+    attachments,
+    createdAt: normalizedEnvelope.createdAt,
+    editedAt: Number(payload.editedAt) > 0 ? Math.round(Number(payload.editedAt)) : null,
+    relayEnvelope: normalizedEnvelope,
+  };
+}
+
+async function handleRelayChatPacket(packet, { fromReplay = false } = {}) {
+  const roomId = normalizeRoomIdValue(packet?.roomId || roomState?.id);
+  const normalizedEnvelope = normalizeRelayEnvelopeShape(packet?.envelope, roomId);
+  if (!normalizedEnvelope) {
+    return;
+  }
+
+  if (roomState?.id && normalizeRoomIdValue(roomState.id) !== normalizedEnvelope.roomId) {
+    return;
+  }
+
+  const sourceId = String(packet?.sourceId || "").trim();
+  const attachmentPayloads = Array.isArray(packet?.attachmentPayloads)
+    ? packet.attachmentPayloads
+        .map((item) => normalizeRelayAttachmentPayloadShape(item, normalizedEnvelope.messageId))
+        .filter(Boolean)
+    : [];
+
+  await storeRelayEnvelopeRecord(normalizedEnvelope.roomId, normalizedEnvelope, sourceId);
+  relayMessageEnvelopeCache.set(normalizedEnvelope.messageId, normalizedEnvelope);
+
+  if (attachmentPayloads.length > 0) {
+    await storeRelayAttachmentPayloads(normalizedEnvelope.roomId, attachmentPayloads, sourceId);
+  }
+
+  const decryptedMessage = await decryptRelayEnvelopeToMessage(normalizedEnvelope, sourceId);
+  if (!decryptedMessage) {
+    return;
+  }
+
+  upsertChatMessage(decryptedMessage);
+  renderChat();
+
+  const notificationMessage = {
+    id: decryptedMessage.id,
+    roomId: normalizedEnvelope.roomId,
+    userId: decryptedMessage.userId,
+    userName: decryptedMessage.userName,
+    text: decryptedMessage.text,
+    createdAt: decryptedMessage.createdAt,
+  };
+
+  if (fromReplay) {
+    setNotificationCheckpoint(normalizedEnvelope.roomId, notificationMessage);
+    rememberProcessedNotificationMessageId(decryptedMessage.id);
+    return;
+  }
+
+  await handleRealtimeNotificationMessage(notificationMessage, normalizedEnvelope.roomId);
+}
+
+async function loadRelayRoomHistory(roomId) {
+  const cleanRoomId = normalizeRoomIdValue(roomId);
+  if (!cleanRoomId) {
+    return;
+  }
+
+  const roomKey = await ensureRelayRoomKey(cleanRoomId);
+  if (!roomKey) {
+    setStatus(t("roomKeyRequired"));
+    return;
+  }
+
+  const records = await loadRelayEnvelopeRecords(cleanRoomId, RELAY_HISTORY_REPLAY_LIMIT);
+  const restored = [];
+
+  for (const record of records) {
+    const normalizedEnvelope = normalizeRelayEnvelopeShape(record?.envelope, cleanRoomId);
+    if (!normalizedEnvelope) {
+      continue;
+    }
+
+    relayMessageEnvelopeCache.set(normalizedEnvelope.messageId, normalizedEnvelope);
+    const decrypted = await decryptRelayEnvelopeToMessage(normalizedEnvelope, record?.sourceId || "");
+    if (decrypted) {
+      restored.push(decrypted);
+    }
+  }
+
+  seedNotificationCheckpointFromMessages(cleanRoomId, restored);
+  for (const message of restored) {
+    rememberProcessedNotificationMessageId(message.id);
+  }
+  replaceChatMessages(restored);
+}
+
+async function requestRelayHistoryReplay(roomId) {
+  const cleanRoomId = normalizeRoomIdValue(roomId);
+  if (!cleanRoomId || !selfId) {
+    return;
+  }
+
+  setStatus(t("relayHistorySyncing"));
+  const requestId = createRelayRequestId("history");
+  socket.emit("relay-history-request", {
+    roomId: cleanRoomId,
+    requestId,
+    requesterId: selfId,
+  });
+}
+
+async function sendRelayHistoryChunkToRequester({ roomId, requestId, requesterId }) {
+  const cleanRoomId = normalizeRoomIdValue(roomId);
+  const cleanRequesterId = String(requesterId || "").trim();
+  const cleanRequestId = String(requestId || "").trim().slice(0, 96);
+  if (!cleanRoomId || !cleanRequesterId || !cleanRequestId) {
+    return;
+  }
+
+  const records = await loadRelayEnvelopeRecords(cleanRoomId, RELAY_HISTORY_REPLAY_LIMIT);
+  const envelopes = [];
+  let byteSize = 0;
+
+  for (const record of records) {
+    const normalizedEnvelope = normalizeRelayEnvelopeShape(record?.envelope, cleanRoomId);
+    if (!normalizedEnvelope) {
+      continue;
+    }
+
+    const estimated = estimatePayloadSize(normalizedEnvelope);
+    if (byteSize + estimated > RELAY_HISTORY_REPLAY_MAX_BYTES) {
+      break;
+    }
+
+    byteSize += estimated;
+    envelopes.push(normalizedEnvelope);
+  }
+
+  if (envelopes.length === 0) {
+    return;
+  }
+
+  socket.emit("relay-history-chunk", {
+    roomId: cleanRoomId,
+    requestId: cleanRequestId,
+    targetId: cleanRequesterId,
+    envelopes,
+  });
+}
+
+function splitRelayCiphertextToChunks(ciphertext, chunkSize = RELAY_ATTACHMENT_CHUNK_SIZE) {
+  const cleanCiphertext = String(ciphertext || "");
+  if (!cleanCiphertext) {
+    return [];
+  }
+
+  const result = [];
+  for (let offset = 0; offset < cleanCiphertext.length; offset += chunkSize) {
+    result.push(cleanCiphertext.slice(offset, offset + chunkSize));
+  }
+  return result;
+}
+
+function clearRelayAttachmentRequestTimeout(entry) {
+  if (entry?.timeoutId) {
+    clearTimeout(entry.timeoutId);
+    entry.timeoutId = null;
+  }
+}
+
+function markRelayAttachmentRequestFailed(requestId) {
+  const cleanRequestId = String(requestId || "").trim();
+  if (!cleanRequestId) {
+    return;
+  }
+
+  const entry = relayAttachmentRequestMap.get(cleanRequestId);
+  if (entry) {
+    clearRelayAttachmentRequestTimeout(entry);
+    relayAttachmentRequestMap.delete(cleanRequestId);
+  }
+  setStatus(t("attachmentSourceUnavailable"));
+}
+
+function scheduleRelayAttachmentRequestTimeout(requestId) {
+  const cleanRequestId = String(requestId || "").trim();
+  const entry = relayAttachmentRequestMap.get(cleanRequestId);
+  if (!entry) {
+    return;
+  }
+
+  clearRelayAttachmentRequestTimeout(entry);
+  entry.timeoutId = setTimeout(() => {
+    const current = relayAttachmentRequestMap.get(cleanRequestId);
+    if (!current) {
+      return;
+    }
+
+    const nextSourceId = Array.isArray(current.pendingSources) ? current.pendingSources.shift() : "";
+    if (nextSourceId) {
+      void emitRelayAttachmentRequestForSource(cleanRequestId, nextSourceId);
+      return;
+    }
+    markRelayAttachmentRequestFailed(cleanRequestId);
+  }, RELAY_ATTACHMENT_REQUEST_TIMEOUT_MS);
+}
+
+async function emitRelayAttachmentRequestForSource(requestId, sourceId) {
+  const cleanRequestId = String(requestId || "").trim();
+  const cleanSourceId = String(sourceId || "").trim();
+  const entry = relayAttachmentRequestMap.get(cleanRequestId);
+  if (!entry || !cleanSourceId) {
+    markRelayAttachmentRequestFailed(cleanRequestId);
+    return false;
+  }
+
+  entry.activeSourceId = cleanSourceId;
+  entry.chunks = [];
+  entry.iv = "";
+
+  socket.emit("relay-attachment-request", {
+    roomId: entry.roomId,
+    requestId: cleanRequestId,
+    targetId: cleanSourceId,
+    attachmentRef: {
+      messageId: entry.messageId,
+      attachmentId: entry.attachmentId,
+    },
+  });
+
+  scheduleRelayAttachmentRequestTimeout(cleanRequestId);
+  return true;
+}
+
+async function requestRelayAttachmentFromPeers(roomId, messageId, attachment) {
+  const cleanRoomId = normalizeRoomIdValue(roomId);
+  const cleanMessageId = String(messageId || "").trim();
+  if (!cleanRoomId || !cleanMessageId || !attachment?.id || !selfId) {
+    return false;
+  }
+
+  const hydratedLocally = await hydrateRelayAttachmentUrl(cleanRoomId, cleanMessageId, attachment.id);
+  if (hydratedLocally) {
+    renderChat();
+    return true;
+  }
+
+  const sources = getRelayAttachmentSources(cleanRoomId, cleanMessageId, attachment.id)
+    .filter((sourceId) => sourceId && sourceId !== selfId);
+  if (sources.length === 0) {
+    setStatus(t("attachmentSourceUnavailable"));
+    return false;
+  }
+
+  const firstSourceId = sources.shift() || "";
+  if (!firstSourceId) {
+    setStatus(t("attachmentSourceUnavailable"));
+    return false;
+  }
+
+  const requestId = createRelayRequestId("attachment");
+  relayAttachmentRequestMap.set(requestId, {
+    roomId: cleanRoomId,
+    messageId: cleanMessageId,
+    attachmentId: String(attachment.id || "").trim(),
+    chunks: [],
+    iv: "",
+    name: attachment.name || "file",
+    mimeType: attachment.mimeType,
+    size: Number(attachment.size) || 0,
+    activeSourceId: firstSourceId,
+    pendingSources: sources,
+    timeoutId: null,
+  });
+
+  return emitRelayAttachmentRequestForSource(requestId, firstSourceId);
+}
+
+async function respondRelayAttachmentRequest({ roomId, requestId, requesterId, attachmentRef }) {
+  const cleanRoomId = normalizeRoomIdValue(roomId);
+  const cleanRequestId = String(requestId || "").trim();
+  const cleanRequesterId = String(requesterId || "").trim();
+  const cleanMessageId = String(attachmentRef?.messageId || "").trim();
+  const cleanAttachmentId = String(attachmentRef?.attachmentId || "").trim();
+
+  if (!cleanRoomId || !cleanRequestId || !cleanRequesterId || !cleanMessageId || !cleanAttachmentId) {
+    return;
+  }
+
+  const stored = await loadRelayAttachmentCipher(cleanRoomId, cleanAttachmentId);
+  if (!stored || String(stored.messageId || "").trim() !== cleanMessageId) {
+    socket.emit("relay-attachment-response", {
+      roomId: cleanRoomId,
+      requestId: cleanRequestId,
+      targetId: cleanRequesterId,
+      attachmentRef: {
+        messageId: cleanMessageId,
+        attachmentId: cleanAttachmentId,
+      },
+      error: "attachment_source_unavailable",
+    });
+    return;
+  }
+
+  const chunks = splitRelayCiphertextToChunks(stored.ciphertext);
+  if (chunks.length === 0) {
+    socket.emit("relay-attachment-response", {
+      roomId: cleanRoomId,
+      requestId: cleanRequestId,
+      targetId: cleanRequesterId,
+      attachmentRef: {
+        messageId: cleanMessageId,
+        attachmentId: cleanAttachmentId,
+      },
+      error: "attachment_source_unavailable",
+    });
+    return;
+  }
+
+  const totalChunks = chunks.length;
+  for (let index = 0; index < chunks.length; index += 1) {
+    socket.emit("relay-attachment-response", {
+      roomId: cleanRoomId,
+      requestId: cleanRequestId,
+      targetId: cleanRequesterId,
+      attachmentRef: {
+        messageId: cleanMessageId,
+        attachmentId: cleanAttachmentId,
+      },
+      chunk: {
+        chunk: chunks[index],
+        chunkIndex: index,
+        totalChunks,
+        eof: index === chunks.length - 1,
+        iv: String(stored.iv || ""),
+        name: String(stored.name || "file"),
+        mimeType: normalizeChatAttachmentMimeType(stored.mimeType),
+        size: Number(stored.size) || 0,
+      },
+    });
+  }
+}
+
+async function completeRelayAttachmentRequest(requestId) {
+  const entry = relayAttachmentRequestMap.get(requestId);
+  if (!entry) {
+    return;
+  }
+
+  clearRelayAttachmentRequestTimeout(entry);
+  relayAttachmentRequestMap.delete(requestId);
+  const ordered = entry.chunks
+    .filter((item) => typeof item === "string")
+    .join("");
+  if (!ordered || !entry.iv) {
+    setStatus(t("attachmentSourceUnavailable"));
+    return;
+  }
+
+  await storeRelayAttachmentCipher(entry.roomId, {
+    messageId: entry.messageId,
+    attachmentId: entry.attachmentId,
+    iv: entry.iv,
+    ciphertext: ordered,
+    name: entry.name || "file",
+    mimeType: normalizeChatAttachmentMimeType(entry.mimeType),
+    size: Number(entry.size) || 0,
+  });
+
+  const hydrated = await hydrateRelayAttachmentUrl(
+    entry.roomId,
+    entry.messageId,
+    entry.attachmentId
+  );
+  if (hydrated) {
+    renderChat();
+  }
+}
+
+async function handleRelayAttachmentResponse(payload) {
+  const cleanRequestId = String(payload?.requestId || "").trim();
+  if (!cleanRequestId || !relayAttachmentRequestMap.has(cleanRequestId)) {
+    return;
+  }
+
+  const entry = relayAttachmentRequestMap.get(cleanRequestId);
+  const cleanTargetId = String(payload?.targetId || "").trim();
+  if (cleanTargetId && selfId && cleanTargetId !== selfId) {
+    return;
+  }
+  const cleanSourceId = String(payload?.sourceId || "").trim();
+  if (cleanSourceId && entry.activeSourceId && cleanSourceId !== entry.activeSourceId) {
+    return;
+  }
+
+  if (payload?.error) {
+    clearRelayAttachmentRequestTimeout(entry);
+    const nextSourceId = Array.isArray(entry.pendingSources) ? entry.pendingSources.shift() : "";
+    if (nextSourceId) {
+      await emitRelayAttachmentRequestForSource(cleanRequestId, nextSourceId);
+      return;
+    }
+    markRelayAttachmentRequestFailed(cleanRequestId);
+    return;
+  }
+
+  const chunk = payload?.chunk;
+  if (!chunk || typeof chunk !== "object") {
+    return;
+  }
+
+  const chunkIndex = Number(chunk.chunkIndex);
+  const totalChunks = Number(chunk.totalChunks);
+  if (!Number.isFinite(chunkIndex) || chunkIndex < 0 || !Number.isFinite(totalChunks) || totalChunks <= 0) {
+    return;
+  }
+
+  scheduleRelayAttachmentRequestTimeout(cleanRequestId);
+  entry.chunks[chunkIndex] = String(chunk.chunk || "");
+  if (!entry.iv && chunk.iv) {
+    entry.iv = String(chunk.iv || "");
+  }
+  if (chunk.name) {
+    entry.name = String(chunk.name || "file");
+  }
+  if (chunk.mimeType) {
+    entry.mimeType = normalizeChatAttachmentMimeType(chunk.mimeType);
+  }
+  if (Number.isFinite(Number(chunk.size)) && Number(chunk.size) >= 0) {
+    entry.size = Math.round(Number(chunk.size));
+  }
+
+  const haveAllChunks = entry.chunks.filter((item) => typeof item === "string").length >= totalChunks;
+  if (Boolean(chunk.eof) && haveAllChunks) {
+    await completeRelayAttachmentRequest(cleanRequestId);
+  }
+}
+
 function buildChatAttachmentCaption(attachment) {
   const sizeLabel = attachment.size > 0 ? formatFileSize(attachment.size) : "";
   return sizeLabel ? `${attachment.name} (${sizeLabel})` : attachment.name;
 }
 
-function createChatAttachmentElement(attachment) {
+function createChatAttachmentElement(attachment, messageId = "", roomId = "") {
   const wrapper = document.createElement("div");
   wrapper.className = "chat-attachment";
+
+  if (attachment.encrypted && !attachment.url) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "chat-attachment-file-link";
+    button.textContent = t("downloadEncryptedAttachment");
+    button.setAttribute("aria-label", t("downloadEncryptedAttachment"));
+    button.addEventListener("click", () => {
+      void requestRelayAttachmentFromPeers(
+        normalizeRoomIdValue(roomId || attachment.roomId || roomState?.id),
+        String(messageId || attachment.messageId || "").trim(),
+        attachment
+      );
+    });
+    wrapper.appendChild(button);
+
+    const caption = document.createElement("p");
+    caption.className = "chat-attachment-caption";
+    caption.textContent = buildChatAttachmentCaption(attachment);
+    wrapper.appendChild(caption);
+    return wrapper;
+  }
 
   if (attachment.previewKind === "image") {
     const link = document.createElement("a");
@@ -3277,12 +4564,12 @@ function createChatAttachmentElement(attachment) {
   return wrapper;
 }
 
-function createChatAttachmentsElement(attachments) {
+function createChatAttachmentsElement(attachments, messageId = "", roomId = "") {
   const container = document.createElement("div");
   container.className = "chat-attachments";
 
   for (const attachment of attachments) {
-    container.appendChild(createChatAttachmentElement(attachment));
+    container.appendChild(createChatAttachmentElement(attachment, messageId, roomId));
   }
 
   return container;
@@ -3514,6 +4801,68 @@ async function buildOutgoingChatAttachmentPayloads() {
   return payload;
 }
 
+async function buildRelayEncryptedChatPacket(roomId, text) {
+  const cleanRoomId = normalizeRoomIdValue(roomId);
+  if (!cleanRoomId) {
+    throw new Error("room_key_required");
+  }
+
+  const messageId = createRelayRequestId("msg");
+  const attachmentRefs = [];
+  const attachmentPayloads = [];
+
+  for (const attachment of pendingChatAttachments) {
+    const attachmentId = createRelayRequestId("att");
+    const encrypted = await encryptRelayAttachmentPayload(cleanRoomId, attachment);
+
+    attachmentRefs.push({
+      messageId,
+      attachmentId,
+      name: attachment.name,
+      mimeType: attachment.mimeType,
+      size: attachment.size,
+    });
+
+    attachmentPayloads.push({
+      messageId,
+      attachmentId,
+      name: attachment.name,
+      mimeType: attachment.mimeType,
+      size: attachment.size,
+      iv: encrypted.iv,
+      ciphertext: encrypted.ciphertext,
+    });
+  }
+
+  const encryptedPayload = await encryptRelayPayload(cleanRoomId, {
+    text: String(text || ""),
+    userId: CHAT_AUTHOR_ID,
+    userName: getProfileName(),
+    attachments: attachmentRefs.map((item) => ({
+      attachmentId: item.attachmentId,
+      messageId: item.messageId,
+      name: item.name,
+      mimeType: item.mimeType,
+      size: item.size,
+    })),
+  });
+
+  return {
+    envelope: {
+      v: RELAY_CIPHER_VERSION,
+      alg: RELAY_CRYPTO_ALGORITHM,
+      roomId: cleanRoomId,
+      messageId,
+      senderId: CHAT_AUTHOR_ID,
+      createdAt: Date.now(),
+      iv: encryptedPayload.iv,
+      ciphertext: encryptedPayload.ciphertext,
+      attachmentRefs,
+    },
+    attachmentPayloads,
+  };
+}
+
 function getChatMessageById(messageId) {
   const cleanMessageId = String(messageId || "").trim();
   if (!cleanMessageId) {
@@ -3661,6 +5010,70 @@ function requestSaveChatMessageEdit(messageId) {
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, MAX_CHAT_MESSAGE_LENGTH);
+
+  if (isRelayModeActive()) {
+    if (!roomState?.id) {
+      setStatus(t("joinServerFirst"));
+      return;
+    }
+
+    const keptAttachments = Array.isArray(message.attachments)
+      ? message.attachments.filter((item) => !chatEditRemovedAttachmentIds.has(String(item?.id || "")))
+      : [];
+    const attachmentRefs = keptAttachments.map((item) => ({
+      messageId: message.id,
+      attachmentId: String(item.id || "").trim(),
+      name: String(item.name || "file"),
+      mimeType: normalizeChatAttachmentMimeType(item.mimeType),
+      size: Number(item.size) || 0,
+    }));
+
+    (async () => {
+      try {
+        const encryptedPayload = await encryptRelayPayload(roomState.id, {
+          text: nextText,
+          userId: message.userId || CHAT_AUTHOR_ID,
+          userName: message.userName || getProfileName(),
+          editedAt: Date.now(),
+          attachments: attachmentRefs,
+        });
+
+        socket.emit(
+          "edit-chat-message",
+          {
+            messageId: message.id,
+            envelope: {
+              v: RELAY_CIPHER_VERSION,
+              alg: RELAY_CRYPTO_ALGORITHM,
+              roomId: normalizeRoomIdValue(roomState.id),
+              messageId: message.id,
+              senderId: message.userId || CHAT_AUTHOR_ID,
+              createdAt: Number(message.createdAt) || Date.now(),
+              iv: encryptedPayload.iv,
+              ciphertext: encryptedPayload.ciphertext,
+              attachmentRefs,
+            },
+          },
+          (response) => {
+            if (!response?.ok) {
+              setStatus(mapChatActionError(response?.error));
+              return;
+            }
+            resetChatEditState({ render: true });
+          }
+        );
+      } catch (error) {
+        const normalizedError = String(error?.message || "").trim().toLowerCase();
+        if (normalizedError.includes("room_key_required")) {
+          setStatus(t("roomKeyRequired"));
+        } else {
+          setStatus(t("decryptFailed"));
+        }
+      }
+    })();
+
+    return;
+  }
 
   socket.emit(
     "edit-chat-message",
@@ -3841,7 +5254,13 @@ function createChatMessageElement(message) {
     }
 
     if (Array.isArray(message.attachments) && message.attachments.length > 0) {
-      content.appendChild(createChatAttachmentsElement(message.attachments));
+      content.appendChild(
+        createChatAttachmentsElement(
+          message.attachments,
+          message.id,
+          normalizeRoomIdValue(roomState?.id || message.roomId)
+        )
+      );
     }
   }
 
@@ -7464,6 +8883,15 @@ async function requestJoinRoom(targetRoomId = null) {
     return;
   }
 
+  await fetchBackendNetworkMode();
+  if (isRelayModeActive()) {
+    const relayKey = await ensureRelayRoomKey(roomId);
+    if (!relayKey) {
+      setStatus(t("relayAccessCodeRequired"));
+      return;
+    }
+  }
+
   notificationPreviewRoomId = "";
   persistProfileName();
   const name = getProfileName();
@@ -7918,25 +9346,40 @@ if (chatForm) {
       return;
     }
 
-    let attachments = [];
-    if (hasAttachments) {
-      try {
-        chatSubmitInProgress = true;
-        updateChatAvailability();
-        attachments = await buildOutgoingChatAttachmentPayloads();
-      } catch (error) {
-        setStatus(error?.message || t("chatSendFailed"));
-        return;
-      } finally {
-        chatSubmitInProgress = false;
-        updateChatAvailability();
-      }
-    }
+    try {
+      chatSubmitInProgress = true;
+      updateChatAvailability();
 
-    socket.emit("chat-message", { text, attachments });
-    chatInput.value = "";
-    clearPendingChatAttachments();
-    chatInput.focus();
+      if (isRelayModeActive()) {
+        if (!roomState?.id) {
+          setStatus(t("joinServerFirst"));
+          return;
+        }
+
+        const relayPacket = await buildRelayEncryptedChatPacket(roomState.id, text);
+        socket.emit("chat-message", relayPacket);
+      } else {
+        let attachments = [];
+        if (hasAttachments) {
+          attachments = await buildOutgoingChatAttachmentPayloads();
+        }
+        socket.emit("chat-message", { text, attachments });
+      }
+
+      chatInput.value = "";
+      clearPendingChatAttachments();
+      chatInput.focus();
+    } catch (error) {
+      const normalizedError = String(error?.message || "").trim().toLowerCase();
+      if (normalizedError.includes("room_key_required")) {
+        setStatus(t("roomKeyRequired"));
+      } else {
+        setStatus(error?.message || t("chatSendFailed"));
+      }
+    } finally {
+      chatSubmitInProgress = false;
+      updateChatAvailability();
+    }
   });
 }
 
@@ -8108,6 +9551,7 @@ leaveBtn.addEventListener("click", async () => {
 socket.on("joined-room", async ({ room, selfId: incomingSelfId }) => {
   selfId = incomingSelfId;
   roomState = room;
+  activeBackendNetworkMode = normalizeNetworkModeId(room?.networkMode || activeBackendNetworkMode);
   joined = true;
   notificationPreviewRoomId = "";
   setVoiceCueBaselineFromRoom(room);
@@ -8117,8 +9561,13 @@ socket.on("joined-room", async ({ room, selfId: incomingSelfId }) => {
   updateChatAvailability();
   updateRoomLabels(room.id);
   renderVoiceChannels();
-  replaceChatMessages(room.messages);
-  seedNotificationCheckpointFromMessages(room.id, room.messages);
+  if (isRelayModeActive()) {
+    await loadRelayRoomHistory(room.id);
+    void requestRelayHistoryReplay(room.id);
+  } else {
+    replaceChatMessages(room.messages);
+    seedNotificationCheckpointFromMessages(room.id, room.messages);
+  }
   ensureSavedRoom(room.id);
   renderSavedRooms();
 
@@ -8139,7 +9588,8 @@ socket.on("joined-room", async ({ room, selfId: incomingSelfId }) => {
   updateVoiceControlsAvailability();
 });
 
-socket.on("connect", () => {
+socket.on("connect", async () => {
+  await fetchBackendNetworkMode();
   refreshNotificationAutomation({ sync: true });
 });
 
@@ -8150,6 +9600,7 @@ socket.on("room-state", async (room) => {
   }
 
   roomState = room;
+  activeBackendNetworkMode = normalizeNetworkModeId(room?.networkMode || activeBackendNetworkMode);
   updateRoomLabels(room.id);
   renderVoiceChannels();
   renderSavedRooms();
@@ -8266,23 +9717,118 @@ socket.on("peer-left", ({ peerId }) => {
 });
 
 socket.on("chat-message", (message) => {
+  if (isRelayModeActive() && message?.envelope) {
+    void handleRelayChatPacket(message, { fromReplay: false });
+    return;
+  }
+
   upsertChatMessage(message);
   renderChat();
   void handleRealtimeNotificationMessage(message, roomState?.id || "");
 });
 
 socket.on("saved-room-chat-message", ({ roomId, message } = {}) => {
+  if (isRelayModeActive()) {
+    return;
+  }
   void handleRealtimeNotificationMessage(message, roomId);
 });
 
 socket.on("chat-message-updated", (message) => {
+  if (isRelayModeActive() && message?.envelope) {
+    void handleRelayChatPacket(
+      {
+        roomId: message.roomId || roomState?.id,
+        sourceId: message.sourceId || "",
+        envelope: message.envelope,
+        attachmentPayloads: [],
+      },
+      { fromReplay: true }
+    );
+    return;
+  }
+
   upsertChatMessage(message);
   renderChat();
 });
 
-socket.on("chat-message-deleted", ({ messageId } = {}) => {
-  removeChatMessageById(messageId);
+socket.on("chat-message-deleted", ({ messageId, roomId } = {}) => {
+  const cleanMessageId = String(messageId || "").trim();
+  if (isRelayModeActive()) {
+    const cleanRoomId = normalizeRoomIdValue(roomId || roomState?.id);
+    relayMessageEnvelopeCache.delete(cleanMessageId);
+    if (cleanRoomId && cleanMessageId) {
+      void deleteRelayMessageRecord(cleanRoomId, cleanMessageId).catch(() => {
+        // no-op
+      });
+    }
+  }
+  removeChatMessageById(cleanMessageId);
   renderChat();
+});
+
+socket.on("relay-history-request", ({ roomId, requestId, requesterId } = {}) => {
+  if (!isRelayModeActive() || !joined || normalizeRoomIdValue(roomState?.id) !== normalizeRoomIdValue(roomId)) {
+    return;
+  }
+  if (!requesterId || requesterId === selfId) {
+    return;
+  }
+  void sendRelayHistoryChunkToRequester({ roomId, requestId, requesterId });
+});
+
+socket.on("relay-history-chunk", ({ roomId, requestId, targetId, sourceId, envelopes } = {}) => {
+  if (!isRelayModeActive() || !joined) {
+    return;
+  }
+  if (targetId && selfId && targetId !== selfId) {
+    return;
+  }
+  if (normalizeRoomIdValue(roomState?.id) !== normalizeRoomIdValue(roomId)) {
+    return;
+  }
+
+  const items = Array.isArray(envelopes) ? envelopes : [];
+  (async () => {
+    for (const envelope of items) {
+      await handleRelayChatPacket(
+        {
+          roomId,
+          sourceId: sourceId || "",
+          envelope,
+        },
+        { fromReplay: true }
+      );
+    }
+    if (items.length > 0) {
+      setStatus(t("relayHistorySynced"));
+    }
+  })();
+});
+
+socket.on("relay-attachment-request", ({ roomId, requestId, requesterId, attachmentRef } = {}) => {
+  if (!isRelayModeActive() || !joined) {
+    return;
+  }
+  if (normalizeRoomIdValue(roomState?.id) !== normalizeRoomIdValue(roomId)) {
+    return;
+  }
+  void respondRelayAttachmentRequest({
+    roomId,
+    requestId,
+    requesterId,
+    attachmentRef,
+  });
+});
+
+socket.on("relay-attachment-response", (payload = {}) => {
+  if (!isRelayModeActive() || !joined) {
+    return;
+  }
+  if (normalizeRoomIdValue(roomState?.id) !== normalizeRoomIdValue(payload.roomId)) {
+    return;
+  }
+  void handleRelayAttachmentResponse(payload);
 });
 
 socket.on("chat-error", ({ message } = {}) => {

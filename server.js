@@ -25,8 +25,23 @@ const CHAT_STATE_FILE = path.join(CHAT_STATE_ROOT, "chat-history.json");
 const CHAT_STATE_VERSION = 1;
 const CHAT_STATE_SAVE_DEBOUNCE_MS = 180;
 const MAX_NOTIFICATION_WATCH_ROOMS = 24;
-const NETWORK_MODE = String(process.env.NETWORK_MODE || "server").trim().toLowerCase();
-const P2P_MODE_ENABLED = NETWORK_MODE === "p2p";
+const NETWORK_MODE_SERVER = "server";
+const NETWORK_MODE_P2P = "p2p";
+const NETWORK_MODE_RELAY = "relay";
+const RAW_NETWORK_MODE = String(process.env.NETWORK_MODE || NETWORK_MODE_SERVER).trim().toLowerCase();
+const NETWORK_MODE = [NETWORK_MODE_SERVER, NETWORK_MODE_P2P, NETWORK_MODE_RELAY].includes(
+  RAW_NETWORK_MODE
+)
+  ? RAW_NETWORK_MODE
+  : NETWORK_MODE_SERVER;
+const P2P_MODE_ENABLED = NETWORK_MODE === NETWORK_MODE_P2P;
+const RELAY_MODE_ENABLED = NETWORK_MODE === NETWORK_MODE_RELAY;
+const DISK_CHAT_STORAGE_ENABLED = !RELAY_MODE_ENABLED;
+const SERVER_FILE_UPLOADS_ENABLED = !RELAY_MODE_ENABLED;
+const RELAY_HISTORY_LIMIT = 500;
+const RELAY_MAX_HISTORY_ENVELOPES = 500;
+const RELAY_MAX_HISTORY_BYTES = 64 * 1024 * 1024;
+const RELAY_MAX_ATTACHMENT_CHUNK_BYTES = 8 * 1024 * 1024;
 const CHAT_MIME_EXTENSION_FALLBACKS = Object.freeze({
   "image/jpeg": "jpg",
   "image/png": "png",
@@ -51,7 +66,9 @@ let createP2PMesh = null;
 
 app.use(express.json({ limit: "256kb" }));
 app.use(express.static(PUBLIC_ROOT));
-app.use("/chat-uploads", express.static(CHAT_UPLOADS_ROOT));
+if (SERVER_FILE_UPLOADS_ENABLED) {
+  app.use("/chat-uploads", express.static(CHAT_UPLOADS_ROOT));
+}
 
 const DEFAULT_STUN_URLS = [
   "stun:stun.l.google.com:19302",
@@ -156,6 +173,16 @@ app.get("/api/ice-config", (req, res) => {
   res.json(iceConfig);
 });
 
+app.get("/api/network-mode", (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  res.json({
+    mode: NETWORK_MODE,
+    relay: RELAY_MODE_ENABLED,
+    p2p: P2P_MODE_ENABLED,
+    server: NETWORK_MODE === NETWORK_MODE_SERVER,
+  });
+});
+
 function normalizeNotificationTimestamp(value) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric) || numeric <= 0) {
@@ -253,6 +280,15 @@ function buildNotificationCheckResponseForRoom(roomId, room, checkpoint) {
 }
 
 app.post("/api/notifications/check", (req, res) => {
+  if (RELAY_MODE_ENABLED) {
+    res.setHeader("Cache-Control", "no-store");
+    res.json({
+      rooms: [],
+      mode: NETWORK_MODE,
+    });
+    return;
+  }
+
   const requestedRooms = Array.isArray(req.body?.rooms) ? req.body.rooms : [];
   const normalizedChecks = [];
   const knownRoomIds = new Set();
@@ -868,6 +904,10 @@ function cleanupChatMessages(messages) {
 }
 
 function cleanupRoomUploads(roomId) {
+  if (!SERVER_FILE_UPLOADS_ENABLED) {
+    return;
+  }
+
   const roomStorageId = normalizeChatStorageRoomId(roomId);
   const roomUploadsPath = path.join(CHAT_UPLOADS_ROOT, roomStorageId);
   fs.rm(roomUploadsPath, { recursive: true, force: true }, () => {
@@ -876,6 +916,13 @@ function cleanupRoomUploads(roomId) {
 }
 
 async function normalizeChatAttachments(attachments, roomId) {
+  if (!SERVER_FILE_UPLOADS_ENABLED) {
+    if (Array.isArray(attachments) && attachments.length > 0) {
+      throw new Error("Attachments are disabled in relay mode.");
+    }
+    return [];
+  }
+
   if (!Array.isArray(attachments) || attachments.length === 0) {
     return [];
   }
@@ -965,6 +1012,7 @@ function serializeRoomForMember(room, memberId) {
 
   return {
     id: room.id,
+    networkMode: NETWORK_MODE,
     hostId: currentVoiceChannel ? currentVoiceChannel.hostId : null,
     members: Array.from(room.members).map((id) => ({
       id,
@@ -989,9 +1037,11 @@ function serializeRoomForMember(room, memberId) {
           name: room.names.get(id) || "Guest",
         })),
       })),
-    messages: room.messages
-      .slice(-MAX_CHAT_MESSAGES)
-      .map((message) => serializeChatMessage(message)),
+    messages: RELAY_MODE_ENABLED
+      ? []
+      : room.messages
+          .slice(-MAX_CHAT_MESSAGES)
+          .map((message) => serializeChatMessage(message)),
   };
 }
 
@@ -1126,6 +1176,10 @@ async function persistChatStateToDisk() {
 }
 
 function queueChatStateSave() {
+  if (!DISK_CHAT_STORAGE_ENABLED) {
+    return;
+  }
+
   if (chatStateSaveTimer) {
     clearTimeout(chatStateSaveTimer);
   }
@@ -1144,6 +1198,10 @@ function queueChatStateSave() {
 }
 
 function loadChatStateFromDisk() {
+  if (!DISK_CHAT_STORAGE_ENABLED) {
+    return;
+  }
+
   try {
     if (!fs.existsSync(CHAT_STATE_FILE)) {
       return;
@@ -1208,9 +1266,164 @@ function sendAck(callback, payload) {
   }
 }
 
-fs.mkdirSync(CHAT_UPLOADS_ROOT, { recursive: true });
-fs.mkdirSync(CHAT_STATE_ROOT, { recursive: true });
-loadChatStateFromDisk();
+function normalizeRelayString(value, maxLength = 256) {
+  return String(value || "").trim().slice(0, maxLength);
+}
+
+function normalizeRelayRoomId(value) {
+  const cleanRoomId = normalizeRoomIdValue(value);
+  if (!cleanRoomId || cleanRoomId.toLowerCase() === "main") {
+    return "";
+  }
+  return cleanRoomId;
+}
+
+function estimatePayloadBytes(value) {
+  try {
+    return Buffer.byteLength(JSON.stringify(value ?? null), "utf8");
+  } catch {
+    return 0;
+  }
+}
+
+function sanitizeRelayAttachmentRef(value = {}) {
+  const messageId = normalizeRelayString(value.messageId, 96);
+  const attachmentId = normalizeRelayString(value.attachmentId, 96);
+  const name = normalizeRelayString(value.name, 120);
+  const mimeType = normalizeChatAttachmentMimeType(value.mimeType);
+  const size = Number(value.size);
+  if (!messageId || !attachmentId) {
+    return null;
+  }
+
+  return {
+    messageId,
+    attachmentId,
+    name: name || "file",
+    mimeType,
+    size: Number.isFinite(size) && size >= 0 ? Math.round(size) : 0,
+  };
+}
+
+function sanitizeRelayEnvelope(value = {}) {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const roomId = normalizeRelayRoomId(value.roomId);
+  const messageId = normalizeRelayString(value.messageId, 96);
+  const senderId = normalizeRelayString(value.senderId, 96);
+  const createdAt = Number(value.createdAt);
+  const v = Number(value.v);
+  const alg = normalizeRelayString(value.alg, 24);
+  const iv = normalizeRelayString(value.iv, 128);
+  const ciphertext = normalizeRelayString(value.ciphertext, 1024 * 1024 * 2);
+
+  if (!roomId || !messageId || !senderId) {
+    return null;
+  }
+  if (!Number.isFinite(createdAt) || createdAt <= 0) {
+    return null;
+  }
+  if (v !== 1 || alg !== "AES-GCM-256") {
+    return null;
+  }
+  if (!iv || !ciphertext) {
+    return null;
+  }
+
+  const attachmentRefs = Array.isArray(value.attachmentRefs)
+    ? value.attachmentRefs
+        .map((item) => sanitizeRelayAttachmentRef(item))
+        .filter(Boolean)
+        .slice(0, MAX_CHAT_ATTACHMENTS)
+    : [];
+
+  return {
+    v,
+    alg,
+    roomId,
+    messageId,
+    senderId,
+    createdAt: Math.round(createdAt),
+    iv,
+    ciphertext,
+    attachmentRefs,
+  };
+}
+
+function sanitizeRelayAttachmentPayload(value = {}) {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const attachmentId = normalizeRelayString(value.attachmentId, 96);
+  const messageId = normalizeRelayString(value.messageId, 96);
+  const iv = normalizeRelayString(value.iv, 128);
+  const ciphertext = normalizeRelayString(value.ciphertext, 1024 * 1024 * 12);
+  const name = normalizeRelayString(value.name, 120);
+  const mimeType = normalizeChatAttachmentMimeType(value.mimeType);
+  const size = Number(value.size);
+
+  if (!attachmentId || !messageId || !iv || !ciphertext) {
+    return null;
+  }
+
+  const normalizedSize = Number.isFinite(size) && size >= 0 ? Math.round(size) : 0;
+  return {
+    attachmentId,
+    messageId,
+    iv,
+    ciphertext,
+    name: name || "file",
+    mimeType,
+    size: normalizedSize,
+  };
+}
+
+function sanitizeRelayAttachmentChunk(value = {}) {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const chunk = normalizeRelayString(value.chunk, 1024 * 1024 * 12);
+  const chunkIndex = Number(value.chunkIndex);
+  const totalChunks = Number(value.totalChunks);
+  const iv = normalizeRelayString(value.iv, 128);
+  const name = normalizeRelayString(value.name, 120);
+  const mimeType = normalizeChatAttachmentMimeType(value.mimeType);
+  const size = Number(value.size);
+
+  if (!chunk) {
+    return null;
+  }
+
+  if (!Number.isFinite(chunkIndex) || chunkIndex < 0) {
+    return null;
+  }
+  if (!Number.isFinite(totalChunks) || totalChunks <= 0) {
+    return null;
+  }
+
+  return {
+    chunk,
+    chunkIndex: Math.round(chunkIndex),
+    totalChunks: Math.round(totalChunks),
+    eof: Boolean(value.eof),
+    iv,
+    name,
+    mimeType,
+    size: Number.isFinite(size) && size >= 0 ? Math.round(size) : 0,
+  };
+}
+
+if (SERVER_FILE_UPLOADS_ENABLED) {
+  fs.mkdirSync(CHAT_UPLOADS_ROOT, { recursive: true });
+}
+if (DISK_CHAT_STORAGE_ENABLED) {
+  fs.mkdirSync(CHAT_STATE_ROOT, { recursive: true });
+  loadChatStateFromDisk();
+}
 
 if (P2P_MODE_ENABLED) {
   ({ createP2PMesh } = require("./p2p/mesh"));
@@ -1243,6 +1456,165 @@ io.on("connection", (socket) => {
   socket.on("watch-saved-rooms", ({ roomIds } = {}) => {
     replaceWatchedRoomsForSocket(socket, roomIds);
   });
+
+  socket.on("relay-history-request", ({ roomId, requestId, requesterId } = {}) => {
+    if (!RELAY_MODE_ENABLED) {
+      return;
+    }
+
+    const cleanRoomId = normalizeRelayRoomId(roomId);
+    const cleanRequestId = normalizeRelayString(requestId, 96);
+    const cleanRequesterId = normalizeRelayString(requesterId, 96);
+    if (!cleanRoomId || !cleanRequestId || !cleanRequesterId) {
+      return;
+    }
+
+    if (socket.data.roomId !== cleanRoomId) {
+      return;
+    }
+    if (cleanRequesterId !== socket.id) {
+      return;
+    }
+
+    const room = rooms.get(cleanRoomId);
+    if (!room || !room.members.has(socket.id)) {
+      return;
+    }
+
+    socket.to(cleanRoomId).emit("relay-history-request", {
+      roomId: cleanRoomId,
+      requestId: cleanRequestId,
+      requesterId: socket.id,
+    });
+  });
+
+  socket.on("relay-history-chunk", ({ roomId, requestId, targetId, envelopes } = {}) => {
+    if (!RELAY_MODE_ENABLED) {
+      return;
+    }
+
+    const cleanRoomId = normalizeRelayRoomId(roomId);
+    const cleanRequestId = normalizeRelayString(requestId, 96);
+    const cleanTargetId = normalizeRelayString(targetId, 96);
+    if (!cleanRoomId || !cleanRequestId || !cleanTargetId) {
+      return;
+    }
+    if (socket.data.roomId !== cleanRoomId) {
+      return;
+    }
+
+    const room = rooms.get(cleanRoomId);
+    if (!room || !room.members.has(socket.id) || !room.members.has(cleanTargetId)) {
+      return;
+    }
+    if (!isLocalSocketMember(cleanTargetId)) {
+      return;
+    }
+
+    const sanitizedEnvelopes = Array.isArray(envelopes)
+      ? envelopes
+          .map((item) => sanitizeRelayEnvelope(item))
+          .filter(Boolean)
+          .slice(0, RELAY_MAX_HISTORY_ENVELOPES)
+      : [];
+    if (sanitizedEnvelopes.length === 0) {
+      return;
+    }
+
+    const approximateBytes = estimatePayloadBytes(sanitizedEnvelopes);
+    if (approximateBytes > RELAY_MAX_HISTORY_BYTES) {
+      return;
+    }
+
+    io.to(cleanTargetId).emit("relay-history-chunk", {
+      roomId: cleanRoomId,
+      requestId: cleanRequestId,
+      targetId: cleanTargetId,
+      sourceId: socket.id,
+      envelopes: sanitizedEnvelopes,
+    });
+  });
+
+  socket.on("relay-attachment-request", ({ roomId, requestId, targetId, attachmentRef } = {}) => {
+    if (!RELAY_MODE_ENABLED) {
+      return;
+    }
+
+    const cleanRoomId = normalizeRelayRoomId(roomId);
+    const cleanRequestId = normalizeRelayString(requestId, 96);
+    const cleanTargetId = normalizeRelayString(targetId, 96);
+    const cleanAttachmentRef = sanitizeRelayAttachmentRef(attachmentRef);
+    if (!cleanRoomId || !cleanRequestId || !cleanTargetId || !cleanAttachmentRef) {
+      return;
+    }
+    if (socket.data.roomId !== cleanRoomId) {
+      return;
+    }
+
+    const room = rooms.get(cleanRoomId);
+    if (!room || !room.members.has(socket.id) || !room.members.has(cleanTargetId)) {
+      return;
+    }
+    if (!isLocalSocketMember(cleanTargetId)) {
+      return;
+    }
+
+    io.to(cleanTargetId).emit("relay-attachment-request", {
+      roomId: cleanRoomId,
+      requestId: cleanRequestId,
+      targetId: cleanTargetId,
+      requesterId: socket.id,
+      attachmentRef: cleanAttachmentRef,
+    });
+  });
+
+  socket.on(
+    "relay-attachment-response",
+    ({ roomId, requestId, targetId, attachmentRef, chunk, error } = {}) => {
+      if (!RELAY_MODE_ENABLED) {
+        return;
+      }
+
+      const cleanRoomId = normalizeRelayRoomId(roomId);
+      const cleanRequestId = normalizeRelayString(requestId, 96);
+      const cleanTargetId = normalizeRelayString(targetId, 96);
+      const cleanAttachmentRef = sanitizeRelayAttachmentRef(attachmentRef);
+      if (!cleanRoomId || !cleanRequestId || !cleanTargetId || !cleanAttachmentRef) {
+        return;
+      }
+      if (socket.data.roomId !== cleanRoomId) {
+        return;
+      }
+
+      const room = rooms.get(cleanRoomId);
+      if (!room || !room.members.has(socket.id) || !room.members.has(cleanTargetId)) {
+        return;
+      }
+      if (!isLocalSocketMember(cleanTargetId)) {
+        return;
+      }
+
+      const sanitizedChunk = sanitizeRelayAttachmentChunk(chunk);
+      const cleanError = normalizeRelayString(error, 140);
+      if (!sanitizedChunk && !cleanError) {
+        return;
+      }
+
+      if (sanitizedChunk && estimatePayloadBytes(sanitizedChunk) > RELAY_MAX_ATTACHMENT_CHUNK_BYTES) {
+        return;
+      }
+
+      io.to(cleanTargetId).emit("relay-attachment-response", {
+        roomId: cleanRoomId,
+        requestId: cleanRequestId,
+        targetId: cleanTargetId,
+        sourceId: socket.id,
+        attachmentRef: cleanAttachmentRef,
+        chunk: sanitizedChunk,
+        error: cleanError || "",
+      });
+    }
+  );
 
   socket.on("join-room", async ({ roomId, name, authorId } = {}) => {
     const cleanRoomId = String(roomId || "").trim();
@@ -1319,7 +1691,7 @@ io.on("connection", (socket) => {
     });
   });
 
-  socket.on("chat-message", async ({ text, attachments } = {}) => {
+  socket.on("chat-message", async ({ text, attachments, envelope, attachmentPayloads } = {}) => {
     const roomId = socket.data.roomId;
     if (!roomId || !rooms.has(roomId)) {
       return;
@@ -1327,6 +1699,61 @@ io.on("connection", (socket) => {
 
     const room = rooms.get(roomId);
     if (!room.members.has(socket.id)) {
+      return;
+    }
+
+    if (RELAY_MODE_ENABLED) {
+      const sanitizedEnvelope = sanitizeRelayEnvelope(envelope);
+      const relaySenderId = normalizeRelayString(socket.data.chatAuthorId || socket.id, 96);
+      if (!sanitizedEnvelope || sanitizedEnvelope.roomId !== roomId) {
+        socket.emit("chat-error", {
+          message: "Invalid encrypted payload.",
+        });
+        return;
+      }
+      if (!relaySenderId || sanitizedEnvelope.senderId !== relaySenderId) {
+        socket.emit("chat-error", {
+          message: "Encrypted sender does not match active client.",
+        });
+        return;
+      }
+
+      const sanitizedAttachmentPayloads = Array.isArray(attachmentPayloads)
+        ? attachmentPayloads
+            .map((item) => sanitizeRelayAttachmentPayload(item))
+            .filter(Boolean)
+            .slice(0, MAX_CHAT_ATTACHMENTS)
+        : [];
+      const allowedAttachmentIds = new Set(
+        Array.isArray(sanitizedEnvelope.attachmentRefs)
+          ? sanitizedEnvelope.attachmentRefs.map((item) => item.attachmentId)
+          : []
+      );
+      const alignedAttachmentPayloads = sanitizedAttachmentPayloads.filter((item) => {
+        if (item.messageId !== sanitizedEnvelope.messageId) {
+          return false;
+        }
+        if (allowedAttachmentIds.size > 0 && !allowedAttachmentIds.has(item.attachmentId)) {
+          return false;
+        }
+        return true;
+      });
+
+      const approximateBytes =
+        estimatePayloadBytes(sanitizedEnvelope) + estimatePayloadBytes(alignedAttachmentPayloads);
+      if (approximateBytes > RELAY_MAX_HISTORY_BYTES) {
+        socket.emit("chat-error", {
+          message: "Encrypted payload too large.",
+        });
+        return;
+      }
+
+      io.to(roomId).emit("chat-message", {
+        roomId,
+        sourceId: socket.id,
+        envelope: sanitizedEnvelope,
+        attachmentPayloads: alignedAttachmentPayloads,
+      });
       return;
     }
 
@@ -1382,7 +1809,7 @@ io.on("connection", (socket) => {
     }
   });
 
-  socket.on("edit-chat-message", async ({ messageId, text, removeAttachmentIds } = {}, callback) => {
+  socket.on("edit-chat-message", async ({ messageId, text, removeAttachmentIds, envelope } = {}, callback) => {
     const roomId = socket.data.roomId;
     if (!roomId || !rooms.has(roomId)) {
       sendAck(callback, {
@@ -1397,6 +1824,42 @@ io.on("connection", (socket) => {
       sendAck(callback, {
         ok: false,
         error: "Join server first.",
+      });
+      return;
+    }
+
+    if (RELAY_MODE_ENABLED) {
+      const cleanMessageId = normalizeRelayString(messageId, 96);
+      const sanitizedEnvelope = sanitizeRelayEnvelope(envelope);
+      const relaySenderId = normalizeRelayString(socket.data.chatAuthorId || socket.id, 96);
+      if (
+        !cleanMessageId
+        || !sanitizedEnvelope
+        || sanitizedEnvelope.roomId !== roomId
+        || sanitizedEnvelope.messageId !== cleanMessageId
+      ) {
+        sendAck(callback, {
+          ok: false,
+          error: "Invalid encrypted payload.",
+        });
+        return;
+      }
+      if (!relaySenderId || sanitizedEnvelope.senderId !== relaySenderId) {
+        sendAck(callback, {
+          ok: false,
+          error: "Encrypted sender does not match active client.",
+        });
+        return;
+      }
+
+      io.to(roomId).emit("chat-message-updated", {
+        roomId,
+        sourceId: socket.id,
+        messageId: cleanMessageId,
+        envelope: sanitizedEnvelope,
+      });
+      sendAck(callback, {
+        ok: true,
       });
       return;
     }
@@ -1506,6 +1969,28 @@ io.on("connection", (socket) => {
       sendAck(callback, {
         ok: false,
         error: "Join server first.",
+      });
+      return;
+    }
+
+    if (RELAY_MODE_ENABLED) {
+      const cleanMessageId = normalizeRelayString(messageId, 96);
+      if (!cleanMessageId) {
+        sendAck(callback, {
+          ok: false,
+          error: "Invalid message id.",
+        });
+        return;
+      }
+
+      io.to(roomId).emit("chat-message-deleted", {
+        roomId,
+        sourceId: socket.id,
+        messageId: cleanMessageId,
+      });
+
+      sendAck(callback, {
+        ok: true,
       });
       return;
     }
@@ -1823,7 +2308,10 @@ function startServer(options = {}) {
       const displayHost = requestedHost === "0.0.0.0" ? "localhost" : requestedHost;
 
       console.log(`Voice messenger started on ${protocol}://${displayHost}:${actualPort}`);
-      console.log(`Network mode: ${P2P_MODE_ENABLED ? "p2p" : "server"}`);
+      console.log(`Network mode: ${NETWORK_MODE}`);
+      if (RELAY_MODE_ENABLED) {
+        console.log("Relay mode: server does not persist chat history/uploads on disk.");
+      }
       console.log(
         `ICE config: ${countUrls(iceConfig.iceServers)} url(s), TURN ${
           hasTurnServer(iceConfig.iceServers) ? "enabled" : "disabled"
