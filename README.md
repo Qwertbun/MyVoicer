@@ -168,6 +168,8 @@ What it does:
 - gets/renews Let's Encrypt certificate via `certbot --standalone` (uses port 80 for HTTP challenge)
 - default domain is `owa.mine-souls.ru` (override with `DOMAIN=...`)
 - syncs certs into repository path `certs/letsencrypt/export/<domain>/`
+- auto-stops `nginx/apache2/caddy` during challenge and starts them back
+- checks that domain A-record points to current host public IPv4 before issue
 - starts backend with:
   - `HOST=0.0.0.0`
   - `PORT=3001`

@@ -13,6 +13,10 @@ NETWORK_MODE="${NETWORK_MODE:-server}"
 STAGING="${STAGING:-0}"
 CERTBOT_BIN="${CERTBOT_BIN:-certbot}"
 CERT_SOURCE="${CERT_SOURCE:-auto}"
+CERTBOT_STOP_SERVICES="${CERTBOT_STOP_SERVICES:-nginx apache2 caddy}"
+CERTBOT_PRECHECK_DNS="${CERTBOT_PRECHECK_DNS:-1}"
+
+STOPPED_SERVICES=()
 
 print_usage() {
   cat <<'EOF'
@@ -33,6 +37,11 @@ Environment:
   STAGING        1 to use Let's Encrypt staging endpoint (default: 0).
   CERTBOT_BIN    Certbot command name/path (default: certbot).
   CERT_SOURCE    auto | repo | system (default: auto).
+  CERTBOT_STOP_SERVICES
+                Space-separated services to stop during http-01 challenge
+                (default: "nginx apache2 caddy").
+  CERTBOT_PRECHECK_DNS
+                1 to validate DOMAIN A-record points to this host public IPv4.
 EOF
 }
 
@@ -82,6 +91,86 @@ ensure_port80_free() {
   fi
 }
 
+get_public_ipv4() {
+  if command -v curl >/dev/null 2>&1; then
+    curl -4fsS https://api.ipify.org 2>/dev/null || true
+    return
+  fi
+  echo ""
+}
+
+get_domain_a_record() {
+  if command -v dig >/dev/null 2>&1; then
+    dig +short A "$DOMAIN" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1
+    return
+  fi
+  if command -v host >/dev/null 2>&1; then
+    host "$DOMAIN" 2>/dev/null | awk '/has address/ { print $4; exit }'
+    return
+  fi
+  echo ""
+}
+
+precheck_domain_points_to_host() {
+  if [[ "$CERTBOT_PRECHECK_DNS" != "1" ]]; then
+    return
+  fi
+
+  local public_ip
+  local domain_ip
+  public_ip="$(get_public_ipv4)"
+  domain_ip="$(get_domain_a_record)"
+
+  if [[ -z "$public_ip" || -z "$domain_ip" ]]; then
+    echo "[certbot-linux] DNS/IP precheck skipped (cannot resolve public_ip or domain A-record)."
+    return
+  fi
+
+  if [[ "$public_ip" != "$domain_ip" ]]; then
+    echo "[certbot-linux] DOMAIN DNS mismatch detected." >&2
+    echo "  domain: $DOMAIN" >&2
+    echo "  DNS A : $domain_ip" >&2
+    echo "  host IP: $public_ip" >&2
+    echo "[certbot-linux] update DNS A record or run on the server behind $domain_ip." >&2
+    exit 1
+  fi
+}
+
+stop_challenge_services() {
+  if [[ -z "${CERTBOT_STOP_SERVICES// }" ]]; then
+    return
+  fi
+  if ! command -v systemctl >/dev/null 2>&1; then
+    return
+  fi
+
+  for service in $CERTBOT_STOP_SERVICES; do
+    if ! systemctl list-unit-files "${service}.service" >/dev/null 2>&1; then
+      continue
+    fi
+    if systemctl is-active --quiet "$service"; then
+      echo "[certbot-linux] stopping service: $service"
+      systemctl stop "$service" || true
+      if ! systemctl is-active --quiet "$service"; then
+        STOPPED_SERVICES+=("$service")
+      fi
+    fi
+  done
+}
+
+start_challenge_services() {
+  if [[ "${#STOPPED_SERVICES[@]}" -eq 0 ]]; then
+    return
+  fi
+
+  for service in "${STOPPED_SERVICES[@]}"; do
+    echo "[certbot-linux] starting service: $service"
+    systemctl start "$service" || true
+  done
+
+  STOPPED_SERVICES=()
+}
+
 issue_certificate() {
   if [[ -z "$EMAIL" ]]; then
     echo "[certbot-linux] EMAIL is required for certificate issue." >&2
@@ -90,6 +179,9 @@ issue_certificate() {
   fi
 
   ensure_certbot_installed
+  precheck_domain_points_to_host
+  stop_challenge_services
+  trap 'start_challenge_services' RETURN
   ensure_port80_free
 
   local certbot_args=(
@@ -109,7 +201,16 @@ issue_certificate() {
   fi
 
   echo "[certbot-linux] requesting certificate for $DOMAIN ..."
+  set +e
   "$CERTBOT_BIN" "${certbot_args[@]}"
+  local certbot_exit="$?"
+  set -e
+  start_challenge_services
+  trap - RETURN
+  if [[ "$certbot_exit" -ne 0 ]]; then
+    echo "[certbot-linux] certbot failed with exit code $certbot_exit" >&2
+    exit "$certbot_exit"
+  fi
   echo "[certbot-linux] certificate is ready."
 }
 
