@@ -29,6 +29,20 @@ MVP voice messenger with server + voice-room host election:
 2. Start desktop app:
    npm start
 
+By default each Electron app starts its own local backend on `127.0.0.1`.
+That means two packaged apps on different PCs do not share rooms automatically, even if the room ID is the same.
+For Internet use, both desktop apps must point to one shared backend.
+
+Remote backend mode:
+- PowerShell:
+  - `$env:QWERBENTUM_REMOTE_URL="https://voice.example.com"`
+  - `npm start`
+- Or pass CLI arg:
+  - `npm start -- --backend-url=https://voice.example.com`
+
+In packaged `.exe` mode:
+- `qwerbentum.exe --backend-url=https://voice.example.com`
+
 Desktop startup order:
 1. Start app process
 2. Check updates from GitHub repository
@@ -102,6 +116,13 @@ Renew certificates:
 - force WSL mode: `npm run cert:renew:le -- -UseWsl`
 
 Note: scripts export Windows-readable PEM files to `certs/letsencrypt/export/<domain>/`.
+
+## Internet desktop topology
+For two PCs in different networks:
+1. Run one shared web/backend server on a public IP or domain.
+2. Enable HTTPS on that server.
+3. Point both Electron apps to that same backend via `QWERBENTUM_REMOTE_URL` or `--backend-url=...`.
+4. Keep TURN reachable from the Internet.
 
 ## Important limitations
 - This is an MVP, not full Discord clone.

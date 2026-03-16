@@ -11,6 +11,11 @@ const SPLASH_MIN_VISIBLE_MS = Number(process.env.SPLASH_MIN_VISIBLE_MS || 9000);
 const MAIN_PAGE_LOAD_RETRIES = Number(process.env.MAIN_PAGE_LOAD_RETRIES || 3);
 const MAIN_PAGE_LOAD_TIMEOUT_MS = Number(process.env.MAIN_PAGE_LOAD_TIMEOUT_MS || 14000);
 const MAIN_PAGE_RETRY_DELAY_MS = Number(process.env.MAIN_PAGE_RETRY_DELAY_MS || 700);
+const REMOTE_BACKEND_ENV_KEYS = [
+  "QWERBENTUM_REMOTE_URL",
+  "QWERBENTUM_BACKEND_URL",
+  "ELECTRON_REMOTE_BACKEND_URL",
+];
 
 let splashWindow = null;
 let mainWindow = null;
@@ -68,6 +73,66 @@ app.on("second-instance", () => {
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function getCliBackendUrlArgument() {
+  const args = Array.isArray(process.argv) ? process.argv : [];
+  for (const arg of args) {
+    const text = String(arg || "").trim();
+    if (!text.toLowerCase().startsWith("--backend-url=")) {
+      continue;
+    }
+    return text.slice("--backend-url=".length).trim();
+  }
+  return "";
+}
+
+function normalizeConfiguredBackendUrl(value) {
+  const raw = String(value || "").trim();
+  if (!raw) {
+    return "";
+  }
+
+  const candidate = /^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `https://${raw}`;
+
+  let parsedUrl = null;
+  try {
+    parsedUrl = new URL(candidate);
+  } catch {
+    throw new Error(`Invalid backend URL: ${raw}`);
+  }
+
+  if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
+    throw new Error(`Backend URL must use http:// or https:// (${raw})`);
+  }
+
+  const normalizedPath = parsedUrl.pathname.replace(/\/+$/, "");
+  parsedUrl.pathname = normalizedPath || "/";
+  parsedUrl.search = "";
+  parsedUrl.hash = "";
+
+  return parsedUrl.toString().replace(/\/$/, "");
+}
+
+function resolveConfiguredBackendUrl() {
+  const cliValue = getCliBackendUrlArgument();
+  if (cliValue) {
+    return normalizeConfiguredBackendUrl(cliValue);
+  }
+
+  for (const envKey of REMOTE_BACKEND_ENV_KEYS) {
+    const envValue = String(process.env[envKey] || "").trim();
+    if (envValue) {
+      return normalizeConfiguredBackendUrl(envValue);
+    }
+  }
+
+  return "";
+}
+
+function buildMainPageUrl(baseUrl) {
+  const normalizedBaseUrl = normalizeConfiguredBackendUrl(baseUrl);
+  return new URL("./index.html", `${normalizedBaseUrl}/`).toString();
 }
 
 function ensureBackendLoaded() {
@@ -411,18 +476,25 @@ async function launchMainFlow() {
 
   createSplashWindow();
   const splashShownAt = Date.now();
-  ensureBackendLoaded();
+  const configuredBackendUrl = resolveConfiguredBackendUrl();
 
-  const port = await findOpenPort(DEFAULT_PORT);
-  const startedServer = await startServer({
-    host: "127.0.0.1",
-    port,
-  });
+  if (configuredBackendUrl) {
+    backendUrl = configuredBackendUrl;
+    console.log(`[main] remote backend mode: ${backendUrl}`);
+  } else {
+    ensureBackendLoaded();
 
-  backendUrl = `http://127.0.0.1:${startedServer.port}`;
+    const port = await findOpenPort(DEFAULT_PORT);
+    const startedServer = await startServer({
+      host: "127.0.0.1",
+      port,
+    });
+
+    backendUrl = `http://127.0.0.1:${startedServer.port}`;
+  }
 
   createMainWindow();
-  const mainPageUrl = `${backendUrl}/index.html`;
+  const mainPageUrl = buildMainPageUrl(backendUrl);
   try {
     await loadMainPageWithRetries(mainWindow, mainPageUrl);
   } catch (error) {
@@ -522,7 +594,7 @@ app.whenReady().then(async () => {
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0 && backendUrl) {
       createMainWindow();
-      loadMainPageWithRetries(mainWindow, `${backendUrl}/index.html`).catch((error) => {
+      loadMainPageWithRetries(mainWindow, buildMainPageUrl(backendUrl)).catch((error) => {
         console.error(`[main] failed to re-open window: ${error.message}`);
       });
       revealMainWindow();
