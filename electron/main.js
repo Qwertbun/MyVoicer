@@ -11,6 +11,10 @@ const SPLASH_MIN_VISIBLE_MS = Number(process.env.SPLASH_MIN_VISIBLE_MS || 9000);
 const MAIN_PAGE_LOAD_RETRIES = Number(process.env.MAIN_PAGE_LOAD_RETRIES || 3);
 const MAIN_PAGE_LOAD_TIMEOUT_MS = Number(process.env.MAIN_PAGE_LOAD_TIMEOUT_MS || 14000);
 const MAIN_PAGE_RETRY_DELAY_MS = Number(process.env.MAIN_PAGE_RETRY_DELAY_MS || 700);
+const DESKTOP_SETTINGS_FILE_NAME = "desktop-settings.json";
+const NETWORK_MODE_ENV_KEY = "NETWORK_MODE";
+const NETWORK_MODE_SERVER = "server";
+const NETWORK_MODE_P2P = "p2p";
 const REMOTE_BACKEND_ENV_KEYS = [
   "QWERBENTUM_REMOTE_URL",
   "QWERBENTUM_BACKEND_URL",
@@ -75,6 +79,49 @@ function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function normalizeEmbeddedNetworkMode(value) {
+  return String(value || "").trim().toLowerCase() === NETWORK_MODE_P2P
+    ? NETWORK_MODE_P2P
+    : NETWORK_MODE_SERVER;
+}
+
+function hasExplicitEnvironmentNetworkMode() {
+  return String(process.env[NETWORK_MODE_ENV_KEY] || "").trim() !== "";
+}
+
+function getDesktopSettingsPath() {
+  return path.join(app.getPath("userData"), DESKTOP_SETTINGS_FILE_NAME);
+}
+
+function loadDesktopSettings() {
+  const filePath = getDesktopSettingsPath();
+
+  try {
+    const raw = fs.readFileSync(filePath, "utf8");
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return {};
+    }
+
+    return {
+      networkMode: normalizeEmbeddedNetworkMode(parsed.networkMode),
+    };
+  } catch {
+    return {};
+  }
+}
+
+function saveDesktopSettings(nextSettings = {}) {
+  const filePath = getDesktopSettingsPath();
+  const payload = {
+    networkMode: normalizeEmbeddedNetworkMode(nextSettings.networkMode),
+  };
+
+  ensureDirectorySafe(path.dirname(filePath));
+  fs.writeFileSync(filePath, JSON.stringify(payload, null, 2), "utf8");
+  return payload;
+}
+
 function getCliBackendUrlArgument() {
   const args = Array.isArray(process.argv) ? process.argv : [];
   for (const arg of args) {
@@ -130,6 +177,23 @@ function resolveConfiguredBackendUrl() {
   return "";
 }
 
+function resolveEmbeddedNetworkMode() {
+  if (hasExplicitEnvironmentNetworkMode()) {
+    return normalizeEmbeddedNetworkMode(process.env[NETWORK_MODE_ENV_KEY]);
+  }
+
+  const settings = loadDesktopSettings();
+  return normalizeEmbeddedNetworkMode(settings.networkMode);
+}
+
+function getEmbeddedNetworkModeState() {
+  return {
+    mode: resolveEmbeddedNetworkMode(),
+    remoteBackendConfigured: Boolean(resolveConfiguredBackendUrl()),
+    environmentLocked: hasExplicitEnvironmentNetworkMode(),
+  };
+}
+
 function buildMainPageUrl(baseUrl) {
   const normalizedBaseUrl = normalizeConfiguredBackendUrl(baseUrl);
   return new URL("./index.html", `${normalizedBaseUrl}/`).toString();
@@ -143,6 +207,8 @@ function ensureBackendLoaded() {
   const runtimeRoot = path.join(app.getPath("userData"), "runtime");
   process.env.CHAT_UPLOADS_ROOT = path.join(runtimeRoot, "chat-uploads");
   process.env.CHAT_STATE_ROOT = path.join(runtimeRoot, "data");
+  process.env[NETWORK_MODE_ENV_KEY] = resolveEmbeddedNetworkMode();
+  console.log(`[main] embedded network mode: ${process.env[NETWORK_MODE_ENV_KEY]}`);
 
   const backend = require("../server");
   startServer = backend.startServer;
@@ -529,6 +595,55 @@ async function shutdownBackend() {
 
 ipcMain.handle("app:get-version", () => app.getVersion());
 ipcMain.handle("app:get-backend-url", () => backendUrl);
+ipcMain.handle("app:get-network-mode", () => getEmbeddedNetworkModeState());
+ipcMain.handle("app:set-network-mode", async (_event, nextMode) => {
+  const currentState = getEmbeddedNetworkModeState();
+  if (currentState.remoteBackendConfigured) {
+    return {
+      ok: false,
+      reason: "remote-backend",
+      ...currentState,
+    };
+  }
+
+  if (currentState.environmentLocked) {
+    return {
+      ok: false,
+      reason: "environment-locked",
+      ...currentState,
+    };
+  }
+
+  const normalizedMode = normalizeEmbeddedNetworkMode(nextMode);
+  if (normalizedMode === currentState.mode) {
+    return {
+      ok: true,
+      changed: false,
+      restarting: false,
+      ...currentState,
+    };
+  }
+
+  saveDesktopSettings({
+    ...loadDesktopSettings(),
+    networkMode: normalizedMode,
+  });
+
+  await shutdownBackend();
+  app.relaunch();
+  setTimeout(() => {
+    app.exit(0);
+  }, 50);
+
+  return {
+    ok: true,
+    changed: true,
+    restarting: true,
+    mode: normalizedMode,
+    remoteBackendConfigured: false,
+    environmentLocked: false,
+  };
+});
 ipcMain.handle("notifications:supported", () => Notification.isSupported());
 ipcMain.handle("notifications:show", (_event, payload = {}) => {
   if (!Notification.isSupported()) {

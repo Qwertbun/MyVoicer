@@ -59,12 +59,15 @@ const profileThemeLabelEl = document.getElementById("profile-theme-label");
 const profileLanguageLabelEl = document.getElementById("profile-language-label");
 const profileMotionLabelEl = document.getElementById("profile-motion-label");
 const profileBackgroundLabelEl = document.getElementById("profile-background-label");
+const profileNetworkLabelEl = document.getElementById("profile-network-label");
+const profileNetworkNoteEl = document.getElementById("profile-network-note");
 const profileMicSelect = document.getElementById("profile-mic-select");
 const profileSpeakerSelect = document.getElementById("profile-speaker-select");
 const profileThemeSelect = document.getElementById("profile-theme-select");
 const profileLanguageSelect = document.getElementById("profile-language-select");
 const profileMotionSelect = document.getElementById("profile-motion-select");
 const profileBackgroundSelect = document.getElementById("profile-background-select");
+const profileNetworkSelect = document.getElementById("profile-network-select");
 const profileTabGeneralBtn = document.getElementById("profile-tab-general");
 const profileTabNotificationsBtn = document.getElementById("profile-tab-notifications");
 const profileGeneralPanel = document.getElementById("profile-general-panel");
@@ -129,6 +132,7 @@ const DEFAULT_THEME_ID = "dark";
 const DEFAULT_LANGUAGE_ID = "en";
 const DEFAULT_MOTION_PROFILE_ID = "balanced";
 const DEFAULT_BACKGROUND_ANIMATION_ID = "aurora";
+const DEFAULT_NETWORK_MODE_ID = "server";
 const SUPPORTED_LANGUAGE_IDS = ["en", "ru", "sl", "la"];
 const MOTION_PROFILES = [
   { id: "off", labelKey: "motionOff" },
@@ -140,6 +144,10 @@ const BACKGROUND_ANIMATION_MODES = [
   { id: "off", labelKey: "backgroundOff" },
   { id: "aurora", labelKey: "backgroundAurora" },
   { id: "nebula", labelKey: "backgroundNebula" },
+];
+const NETWORK_MODES = [
+  { id: "server", labelKey: "networkModeServer" },
+  { id: "p2p", labelKey: "networkModeP2P" },
 ];
 const SUPPORTED_SLAVIC_LANGUAGE_PREFIXES = [
   "sl",
@@ -210,6 +218,15 @@ const I18N = {
     language: "Language",
     motion: "Motion",
     backgroundAnimation: "Background animation",
+    networkMode: "Network mode",
+    networkModeServer: "Integrated server",
+    networkModeP2P: "P2P mesh",
+    networkModeRestartHint: "Restart required after changing network mode.",
+    networkModeElectronOnly: "Embedded network mode switching is available in Electron only.",
+    networkModeRemoteLocked: "Embedded network mode is unavailable while a remote backend URL is configured.",
+    networkModeEnvLocked: "Embedded network mode is controlled by the NETWORK_MODE environment variable.",
+    networkModeRestartPrompt: "Switch network mode to {mode}? The app will restart.",
+    networkModeChangeUnavailable: "Network mode cannot be changed in the current launch mode.",
     generalSettings: "General",
     notificationsSettings: "Notifications",
     enableDesktopNotifications: "Enable desktop notifications",
@@ -409,6 +426,15 @@ const I18N = {
     language: "Язык",
     motion: "Анимации",
     backgroundAnimation: "Анимация фона",
+    networkMode: "Сетевой режим",
+    networkModeServer: "Встроенный сервер",
+    networkModeP2P: "P2P mesh",
+    networkModeRestartHint: "После смены сетевого режима приложение перезапустится.",
+    networkModeElectronOnly: "Переключение встроенного сетевого режима доступно только в Electron.",
+    networkModeRemoteLocked: "Встроенный сетевой режим недоступен, пока задан удалённый backend URL.",
+    networkModeEnvLocked: "Встроенный сетевой режим управляется переменной окружения NETWORK_MODE.",
+    networkModeRestartPrompt: "Переключить сетевой режим на {mode}? Приложение перезапустится.",
+    networkModeChangeUnavailable: "В текущем режиме запуска сетевой режим изменить нельзя.",
     generalSettings: "Общие",
     notificationsSettings: "Уведомления",
     enableDesktopNotifications: "Включить desktop-уведомления",
@@ -982,9 +1008,12 @@ let preferredThemeId = DEFAULT_THEME_ID;
 let preferredLanguageId = DEFAULT_LANGUAGE_ID;
 let preferredMotionProfileId = DEFAULT_MOTION_PROFILE_ID;
 let preferredBackgroundAnimationId = DEFAULT_BACKGROUND_ANIMATION_ID;
+let preferredNetworkModeId = DEFAULT_NETWORK_MODE_ID;
 let activeSettingsTabId = SETTINGS_TAB_GENERAL_ID;
 let notificationPreviewRoomId = "";
 let desktopNotificationsSupported = false;
+let networkModeRemoteBackendConfigured = false;
+let networkModeEnvironmentLocked = false;
 let notificationsEnabled = true;
 let notificationsSavedRoomsEnabled = true;
 let notificationsMentionsEnabled = true;
@@ -1501,6 +1530,78 @@ function applyBackgroundAnimation(backgroundAnimationId, { persist = true } = {}
   if (persist) {
     persistPreferredBackgroundAnimationId();
   }
+}
+
+function normalizeNetworkModeId(value) {
+  return String(value || "").trim().toLowerCase() === "p2p" ? "p2p" : DEFAULT_NETWORK_MODE_ID;
+}
+
+function getNetworkModeLabel(networkModeId) {
+  return t(
+    normalizeNetworkModeId(networkModeId) === "p2p" ? "networkModeP2P" : "networkModeServer"
+  );
+}
+
+function getNetworkModeNoteText() {
+  if (!IS_ELECTRON_RUNTIME) {
+    return t("networkModeElectronOnly");
+  }
+  if (networkModeRemoteBackendConfigured) {
+    return t("networkModeRemoteLocked");
+  }
+  if (networkModeEnvironmentLocked) {
+    return t("networkModeEnvLocked");
+  }
+  return t("networkModeRestartHint");
+}
+
+function syncNetworkModeSelector() {
+  if (!profileNetworkSelect) {
+    return;
+  }
+
+  const selectedNetworkMode = normalizeNetworkModeId(preferredNetworkModeId);
+  profileNetworkSelect.innerHTML = "";
+
+  for (const item of NETWORK_MODES) {
+    const option = document.createElement("option");
+    option.value = item.id;
+    option.textContent = t(item.labelKey);
+    profileNetworkSelect.appendChild(option);
+  }
+
+  profileNetworkSelect.value = selectedNetworkMode;
+  profileNetworkSelect.disabled = !IS_ELECTRON_RUNTIME
+    || networkModeRemoteBackendConfigured
+    || networkModeEnvironmentLocked;
+
+  if (profileNetworkNoteEl) {
+    profileNetworkNoteEl.textContent = getNetworkModeNoteText();
+  }
+}
+
+async function initializeNetworkModeSetting() {
+  preferredNetworkModeId = DEFAULT_NETWORK_MODE_ID;
+  networkModeRemoteBackendConfigured = false;
+  networkModeEnvironmentLocked = false;
+
+  if (!IS_ELECTRON_RUNTIME || !window.desktopApp?.getNetworkMode) {
+    syncNetworkModeSelector();
+    return;
+  }
+
+  try {
+    const state = await window.desktopApp.getNetworkMode();
+    preferredNetworkModeId = normalizeNetworkModeId(state?.mode);
+    networkModeRemoteBackendConfigured = Boolean(state?.remoteBackendConfigured);
+    networkModeEnvironmentLocked = Boolean(state?.environmentLocked);
+  } catch {
+    preferredNetworkModeId = DEFAULT_NETWORK_MODE_ID;
+    networkModeRemoteBackendConfigured = false;
+    networkModeEnvironmentLocked = false;
+  }
+
+  syncNetworkModeSelector();
 }
 
 function normalizeSettingsTabId(value) {
@@ -2188,6 +2289,13 @@ function applyStaticTranslations() {
   if (profileBackgroundLabelEl) {
     profileBackgroundLabelEl.textContent = t("backgroundAnimation");
   }
+  if (profileNetworkLabelEl) {
+    profileNetworkLabelEl.textContent = t("networkMode");
+  }
+  if (profileNetworkNoteEl) {
+    profileNetworkNoteEl.textContent = getNetworkModeNoteText();
+  }
+  syncNetworkModeSelector();
   syncNotificationControls();
   renderPendingChatAttachments();
 }
@@ -7652,6 +7760,49 @@ if (profileBackgroundSelect) {
   });
 }
 
+if (profileNetworkSelect) {
+  profileNetworkSelect.addEventListener("change", async () => {
+    const nextNetworkModeId = normalizeNetworkModeId(profileNetworkSelect.value);
+    if (nextNetworkModeId === preferredNetworkModeId) {
+      syncNetworkModeSelector();
+      return;
+    }
+
+    const approved = await confirmInput(
+      t("networkModeRestartPrompt", {
+        mode: getNetworkModeLabel(nextNetworkModeId),
+      })
+    );
+    if (!approved) {
+      syncNetworkModeSelector();
+      return;
+    }
+
+    if (!window.desktopApp?.setNetworkMode) {
+      syncNetworkModeSelector();
+      setStatus(t("networkModeChangeUnavailable"));
+      return;
+    }
+
+    try {
+      const result = await window.desktopApp.setNetworkMode(nextNetworkModeId);
+      if (!result?.ok) {
+        syncNetworkModeSelector();
+        setStatus(t("networkModeChangeUnavailable"));
+        return;
+      }
+
+      preferredNetworkModeId = normalizeNetworkModeId(result.mode || nextNetworkModeId);
+      networkModeRemoteBackendConfigured = Boolean(result.remoteBackendConfigured);
+      networkModeEnvironmentLocked = Boolean(result.environmentLocked);
+      syncNetworkModeSelector();
+    } catch {
+      syncNetworkModeSelector();
+      setStatus(t("networkModeChangeUnavailable"));
+    }
+  });
+}
+
 if (notificationsEnabledToggle) {
   notificationsEnabledToggle.addEventListener("change", () => {
     notificationsEnabled = Boolean(notificationsEnabledToggle.checked);
@@ -8219,6 +8370,7 @@ setProfilePanelOpen(false);
 micSensitivity = loadMicSensitivity();
 syncMicSensitivityUi();
 void refreshProfileDeviceSelectors();
+void initializeNetworkModeSetting();
 void initializeDesktopNotifications();
 
 if (hasOpusCodec && hasRedCodec) {
