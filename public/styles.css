@@ -1421,6 +1421,14 @@ body.is-electron-runtime .window-chrome {
   isolation: isolate;
 }
 
+@media (min-width: 761px) {
+  .servers-rail,
+  .channels-sidebar,
+  .workspace {
+    grid-row: 2;
+  }
+}
+
 .discord-shell::before,
 .discord-shell::after {
   content: "";

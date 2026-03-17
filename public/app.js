@@ -3386,9 +3386,7 @@ function getCurrentRoomLabel() {
 
 function updateRoomLabels(roomId = null) {
   const label = String(roomId || getCurrentRoomLabel() || MAIN_PAGE_LABEL);
-  const hudTitle = joined
-    ? `${getProjectName()} · #${label}`
-    : `${getProjectName()}_Launcher`;
+  const hudTitle = joined ? `${getProjectName()} · #${label}` : getProjectName();
 
   if (appTitleEl) {
     appTitleEl.textContent = joined ? label : getProjectName();
