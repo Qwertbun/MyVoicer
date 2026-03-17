@@ -1,16 +1,43 @@
 <!doctype html>
-<html lang="en" data-project-name="VM">
+<html lang="en" data-project-name="synto">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title id="page-title">Voice Servers</title>
-    <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="styles.css?v=20260317-window-btns" />
   </head>
   <body>
     <main class="discord-shell">
+      <header id="window-chrome" class="window-chrome" aria-label="Window controls">
+        <div class="window-chrome-left">
+          <span id="window-chrome-badge" class="window-chrome-badge">SY</span>
+          <div class="window-chrome-copy">
+            <strong id="window-chrome-title" class="window-chrome-title">synto</strong>
+            <span id="window-chrome-subtitle" class="window-chrome-subtitle">Disconnected</span>
+          </div>
+        </div>
+        <div class="window-chrome-center">
+          <span id="window-chrome-meta" class="window-chrome-meta">Server chat + voice + screens</span>
+        </div>
+        <div id="window-chrome-controls" class="window-chrome-controls" role="group" aria-label="Window controls">
+          <span id="window-chrome-network" class="window-chrome-chip">SRV</span>
+          <span id="window-chrome-security" class="window-chrome-chip">PLAIN</span>
+          <button id="window-minimize-btn" type="button" class="window-control-btn" aria-label="Minimize" title="Minimize">
+            <svg class="window-control-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path d="M6 16h12" />
+            </svg>
+          </button>
+          <button id="window-close-btn" type="button" class="window-control-btn danger" aria-label="Close" title="Close">
+            <svg class="window-control-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path d="M7 7l10 10" />
+              <path d="M17 7L7 17" />
+            </svg>
+          </button>
+        </div>
+      </header>
+
       <aside id="servers-rail" class="servers-rail" aria-label="Servers">
-        <button id="home-server-btn" type="button" class="server-icon server-brand" title="Voice Messenger">
-          VM
+        <button id="home-server-btn" type="button" class="server-icon server-brand" title="synto">
+          SY
         </button>
         <div class="servers-divider" aria-hidden="true"></div>
         <div id="saved-rooms-list" class="server-list" aria-label="Saved servers"></div>
@@ -21,7 +48,7 @@
 
       <aside class="channels-sidebar">
         <header class="guild-header">
-          <h1 id="app-title">Voice Messenger</h1>
+          <h1 id="app-title">synto</h1>
           <p id="app-subtitle">First entrant in each voice room becomes host and relays voice + screen.</p>
         </header>
 
@@ -106,13 +133,44 @@
       </aside>
 
       <section class="workspace">
-        <header class="workspace-topbar">
-          <div class="channel-title">
-            <span>#</span>
-            <strong id="chat-room-title">main</strong>
+        <section class="workspace-hud" aria-label="Workspace HUD">
+          <div class="topbar-hud topbar-hud-left">
+            <div class="channel-title">
+              <span>#</span>
+              <strong id="chat-room-title">main</strong>
+            </div>
+            <div class="topbar-voice-state">
+              <span class="topbar-voice-dot" aria-hidden="true"></span>
+              <strong id="topbar-voice-state">--</strong>
+            </div>
           </div>
-          <div id="topbar-meta" class="topbar-meta">Server chat + voice + screens</div>
-        </header>
+          <div class="topbar-hud topbar-hud-center">
+            <div id="topbar-meta" class="topbar-meta">Server chat + voice + screens</div>
+          </div>
+          <div class="topbar-hud topbar-hud-right">
+            <div class="topbar-chip" id="topbar-members-chip">
+              <span class="topbar-chip-label">PEERS</span>
+              <strong id="topbar-members-count">0</strong>
+            </div>
+            <div class="topbar-chip" id="topbar-network-chip">
+              <span class="topbar-chip-label">MODE</span>
+              <strong id="topbar-network-mode">SRV</strong>
+            </div>
+            <div class="topbar-chip" id="topbar-crypto-chip">
+              <span class="topbar-chip-label">SEC</span>
+              <strong id="topbar-crypto-state">PLAIN</strong>
+            </div>
+            <button
+              id="topbar-profile-btn"
+              type="button"
+              class="topbar-profile-btn"
+              aria-label="Profile"
+              title="Profile"
+            >
+              ME
+            </button>
+          </div>
+        </section>
 
         <div class="workspace-grid">
           <section class="chat-column">
@@ -289,6 +347,6 @@
     <div id="remote-audios"></div>
 
     <script src="/socket.io/socket.io.js"></script>
-    <script src="app.js"></script>
+    <script src="app.js?v=20260317-window-btns"></script>
   </body>
 </html>

@@ -42,7 +42,7 @@ Run it with:
 - `npm run start:web:p2p`
 - optional bootstrap override:
   - PowerShell: `$env:P2P_BOOTSTRAP="88.99.3.86@node1.hyperdht.org:49737,142.93.90.113@node2.hyperdht.org:49737,138.68.147.8@node3.hyperdht.org:49737"`
-  - packaged exe arg: `qwerbentum.exe --p2p-bootstrap=88.99.3.86@node1.hyperdht.org:49737,142.93.90.113@node2.hyperdht.org:49737,138.68.147.8@node3.hyperdht.org:49737`
+  - packaged exe arg: `Synto.exe --p2p-bootstrap=88.99.3.86@node1.hyperdht.org:49737,142.93.90.113@node2.hyperdht.org:49737,138.68.147.8@node3.hyperdht.org:49737`
 
 Current scope of P2P mode:
 - room discovery between independent backend nodes
@@ -66,7 +66,7 @@ P2P diagnostics endpoint:
    npm start
 
 Default Electron backend URL:
-- `http://owa.mine-souls.ru:3001`
+- `https://lan.mine-souls.ru:3001`
 - this URL is used automatically if no `--backend-url=...` and no remote backend env override are provided.
 
 With current defaults Electron connects to the shared backend above.
@@ -74,13 +74,13 @@ To use a different backend, pass CLI arg or env override.
 
 Remote backend mode:
 - PowerShell:
-  - `$env:QWERBENTUM_REMOTE_URL="https://voice.example.com"`
+  - `$env:SYNTO_REMOTE_URL="https://voice.example.com"`
   - `npm start`
 - Or pass CLI arg:
   - `npm start -- --backend-url=https://voice.example.com`
 
 In packaged `.exe` mode:
-- `qwerbentum.exe --backend-url=https://voice.example.com`
+- `Synto.exe --backend-url=https://voice.example.com`
 
 Desktop startup order:
 1. Start app process
@@ -166,7 +166,7 @@ EMAIL=admin@mine-souls.ru NETWORK_MODE=server npm run cert:linux:https
 
 What it does:
 - gets/renews Let's Encrypt certificate via `certbot --standalone` (uses port 80 for HTTP challenge)
-- default domain is `owa.mine-souls.ru` (override with `DOMAIN=...`)
+- default domain is `lan.mine-souls.ru` (override with `DOMAIN=...`)
 - syncs certs into repository path `certs/letsencrypt/export/<domain>/`
 - auto-stops `nginx/apache2/caddy` during challenge and starts them back
 - checks that domain A-record points to current host public IPv4 before issue
@@ -178,12 +178,16 @@ What it does:
 Related commands:
 - issue/renew cert only: `EMAIL=admin@mine-souls.ru npm run cert:linux:issue`
 - start HTTPS with existing cert only: `NETWORK_MODE=server npm run start:web:https:3001`
+- start HTTPS + auto-update from current git branch before launch:
+  - `GIT_AUTO_UPDATE=1 NETWORK_MODE=server npm run start:web:https:3001`
+- pin auto-update to explicit branch (example `main`):
+  - `GIT_AUTO_UPDATE=1 GIT_BRANCH=main NETWORK_MODE=server npm run start:web:https:3001`
 
 ## Internet desktop topology
 For two PCs in different networks:
 1. Run one shared web/backend server on a public IP or domain.
 2. Enable HTTPS on that server.
-3. Point both Electron apps to that same backend via `QWERBENTUM_REMOTE_URL` or `--backend-url=...`.
+3. Point both Electron apps to that same backend via `SYNTO_REMOTE_URL` or `--backend-url=...`.
 4. Keep TURN reachable from the Internet.
 
 ## Important limitations

@@ -5,7 +5,7 @@ set -euo pipefail
 MODE="${1:-run}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-DOMAIN="${DOMAIN:-owa.mine-souls.ru}"
+DOMAIN="${DOMAIN:-lan.mine-souls.ru}"
 EMAIL="${EMAIL:-}"
 PORT="${PORT:-3001}"
 HOST="${HOST:-0.0.0.0}"
@@ -15,6 +15,10 @@ CERTBOT_BIN="${CERTBOT_BIN:-certbot}"
 CERT_SOURCE="${CERT_SOURCE:-auto}"
 CERTBOT_STOP_SERVICES="${CERTBOT_STOP_SERVICES:-nginx apache2 caddy}"
 CERTBOT_PRECHECK_DNS="${CERTBOT_PRECHECK_DNS:-1}"
+GIT_AUTO_UPDATE="${GIT_AUTO_UPDATE:-0}"
+GIT_REMOTE="${GIT_REMOTE:-origin}"
+GIT_BRANCH="${GIT_BRANCH:-}"
+GIT_RUN_NPM_CI="${GIT_RUN_NPM_CI:-1}"
 
 STOPPED_SERVICES=()
 
@@ -29,7 +33,7 @@ Modes:
   start  Start HTTPS backend with existing cert only.
 
 Environment:
-  DOMAIN         Domain name (default: owa.mine-souls.ru).
+  DOMAIN         Domain name (default: lan.mine-souls.ru).
   EMAIL          Required for run/issue.
   PORT           HTTPS backend port (default: 3001).
   HOST           Backend bind host (default: 0.0.0.0).
@@ -42,6 +46,12 @@ Environment:
                 (default: "nginx apache2 caddy").
   CERTBOT_PRECHECK_DNS
                 1 to validate DOMAIN A-record points to this host public IPv4.
+  GIT_AUTO_UPDATE
+                1 to auto-update repository from git before backend start (default: 0).
+  GIT_REMOTE    Git remote used for auto-update (default: origin).
+  GIT_BRANCH    Target branch for auto-update. Empty means current branch.
+  GIT_RUN_NPM_CI
+                1 to run npm ci --omit=dev after successful git pull (default: 1).
 EOF
 }
 
@@ -286,10 +296,39 @@ start_https_backend() {
   exec node "$REPO_ROOT/scripts/run-web-server.js" "$normalized_mode"
 }
 
+auto_update_repo_from_git() {
+  if [[ "$GIT_AUTO_UPDATE" != "1" ]]; then
+    return
+  fi
+
+  require_cmd git
+
+  local current_branch
+  current_branch="$(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD)"
+  local target_branch="${GIT_BRANCH:-$current_branch}"
+
+  if [[ "$current_branch" != "$target_branch" ]]; then
+    echo "[certbot-linux] GIT_BRANCH='$target_branch' does not match current branch '$current_branch'." >&2
+    echo "[certbot-linux] switch branch manually or clear GIT_BRANCH to use current branch." >&2
+    exit 1
+  fi
+
+  echo "[certbot-linux] auto-update: fetching ${GIT_REMOTE}/${target_branch}"
+  git -C "$REPO_ROOT" fetch --prune "$GIT_REMOTE"
+  git -C "$REPO_ROOT" pull --ff-only "$GIT_REMOTE" "$target_branch"
+
+  if [[ "$GIT_RUN_NPM_CI" == "1" ]]; then
+    require_cmd npm
+    echo "[certbot-linux] auto-update: running npm ci --omit=dev"
+    (cd "$REPO_ROOT" && npm ci --omit=dev)
+  fi
+}
+
 case "$MODE" in
   run)
     issue_certificate
     sync_certificate_to_repo
+    auto_update_repo_from_git
     start_https_backend
     ;;
   issue)
@@ -297,6 +336,7 @@ case "$MODE" in
     sync_certificate_to_repo
     ;;
   start)
+    auto_update_repo_from_git
     start_https_backend
     ;;
   -h|--help|help)

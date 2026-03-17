@@ -7,7 +7,12 @@ const { Notification, app, BrowserWindow, desktopCapturer, ipcMain, shell } = re
 
 const DEFAULT_PORT = Number(process.env.ELECTRON_INTERNAL_PORT || 3000);
 const UPDATE_CHECK_TIMEOUT_MS = Number(process.env.UPDATE_CHECK_TIMEOUT_MS || 12000);
-const SPLASH_MIN_VISIBLE_MS = Number(process.env.SPLASH_MIN_VISIBLE_MS || 9000);
+// Keep splash visible at least until HEXAGON reaches SYNC 99.8%.
+const HEXAGON_SYNC_TARGET_VISIBLE_MS = Number(process.env.HEXAGON_SYNC_TARGET_VISIBLE_MS || 20500);
+const SPLASH_MIN_VISIBLE_MS = Math.max(
+  HEXAGON_SYNC_TARGET_VISIBLE_MS,
+  Number(process.env.SPLASH_MIN_VISIBLE_MS || 0)
+);
 const MAIN_PAGE_LOAD_RETRIES = Number(process.env.MAIN_PAGE_LOAD_RETRIES || 3);
 const MAIN_PAGE_LOAD_TIMEOUT_MS = Number(process.env.MAIN_PAGE_LOAD_TIMEOUT_MS || 14000);
 const MAIN_PAGE_RETRY_DELAY_MS = Number(process.env.MAIN_PAGE_RETRY_DELAY_MS || 700);
@@ -19,15 +24,22 @@ const NETWORK_MODE_RELAY = "relay";
 const BOOT_ENV_NETWORK_MODE_RAW = String(process.env[NETWORK_MODE_ENV_KEY] || "").trim();
 const P2P_BOOTSTRAP_ENV_KEYS = [
   "P2P_BOOTSTRAP",
+  "SYNTO_P2P_BOOTSTRAP",
   "QWERBENTUM_P2P_BOOTSTRAP",
   "HYPERSWARM_BOOTSTRAP",
 ];
 const REMOTE_BACKEND_ENV_KEYS = [
+  "SYNTO_REMOTE_URL",
+  "SYNTO_BACKEND_URL",
   "QWERBENTUM_REMOTE_URL",
   "QWERBENTUM_BACKEND_URL",
   "ELECTRON_REMOTE_BACKEND_URL",
 ];
-const DEFAULT_REMOTE_BACKEND_URL = "http://owa.mine-souls.ru:3001";
+const DEFAULT_REMOTE_BACKEND_URL = "https://lan.mine-souls.ru:3001";
+const APP_WINDOW_WIDTH = 1540;
+const APP_WINDOW_HEIGHT = 940;
+const APP_WINDOW_MIN_WIDTH = 1100;
+const APP_WINDOW_MIN_HEIGHT = 700;
 
 let splashWindow = null;
 let mainWindow = null;
@@ -36,7 +48,7 @@ let shutdownInProgress = false;
 let startServer = null;
 let stopServer = null;
 let pendingNotificationActivationPayload = null;
-const SESSION_PERMISSIONS_KEY = "__qwerbentumPermissionsConfigured";
+const SESSION_PERMISSIONS_KEY = "__syntoPermissionsConfigured";
 
 function ensureDirectorySafe(dirPath) {
   fs.mkdirSync(dirPath, { recursive: true });
@@ -45,14 +57,14 @@ function ensureDirectorySafe(dirPath) {
 function configureElectronStoragePaths() {
   const preferredUserData = process.env.ELECTRON_USER_DATA_DIR
     ? path.resolve(process.env.ELECTRON_USER_DATA_DIR)
-    : path.join(app.getPath("appData"), "qwerbentum");
+    : path.join(app.getPath("appData"), "synto");
 
   let resolvedUserData = preferredUserData;
   try {
     ensureDirectorySafe(preferredUserData);
     app.setPath("userData", preferredUserData);
   } catch (error) {
-    resolvedUserData = path.join(app.getPath("temp"), "qwerbentum-user-data");
+    resolvedUserData = path.join(app.getPath("temp"), "synto-user-data");
     ensureDirectorySafe(resolvedUserData);
     app.setPath("userData", resolvedUserData);
     console.warn(
@@ -352,8 +364,8 @@ async function checkUpdatesFromRepository() {
 
 function createSplashWindow() {
   splashWindow = new BrowserWindow({
-    width: 1180,
-    height: 760,
+    width: APP_WINDOW_WIDTH,
+    height: APP_WINDOW_HEIGHT,
     frame: false,
     resizable: false,
     maximizable: false,
@@ -378,10 +390,11 @@ function createSplashWindow() {
 
 function createMainWindow() {
   mainWindow = new BrowserWindow({
-    width: 1540,
-    height: 940,
-    minWidth: 1100,
-    minHeight: 700,
+    width: APP_WINDOW_WIDTH,
+    height: APP_WINDOW_HEIGHT,
+    minWidth: APP_WINDOW_MIN_WIDTH,
+    minHeight: APP_WINDOW_MIN_HEIGHT,
+    frame: true,
     show: false,
     backgroundColor: "#090b10",
     webPreferences: {
@@ -530,7 +543,7 @@ function buildLoadErrorPage(error, targetUrl) {
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <title>qwerbentum startup error</title>
+    <title>synto startup error</title>
     <style>
       body { margin: 0; font-family: Segoe UI, Arial, sans-serif; background: #0a0f1a; color: #d6e6ff; display: grid; place-items: center; min-height: 100vh; }
       .card { max-width: 720px; margin: 24px; padding: 24px; border: 1px solid #24457a; border-radius: 12px; background: #11192a; }
@@ -668,8 +681,17 @@ async function shutdownBackend() {
   }
 }
 
-ipcMain.handle("app:get-version", () => app.getVersion());
-ipcMain.handle("app:get-backend-url", () => backendUrl);
+function getWindowForEvent(event) {
+  const fromSender = event?.sender ? BrowserWindow.fromWebContents(event.sender) : null;
+  if (fromSender && !fromSender.isDestroyed()) {
+    return fromSender;
+  }
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    return mainWindow;
+  }
+  return null;
+}
+
 ipcMain.handle("app:get-network-mode", () => getEmbeddedNetworkModeState());
 ipcMain.handle("app:set-network-mode", async (_event, nextMode) => {
   const currentState = getEmbeddedNetworkModeState();
@@ -719,6 +741,20 @@ ipcMain.handle("app:set-network-mode", async (_event, nextMode) => {
     environmentLocked: false,
   };
 });
+ipcMain.handle("window:minimize", (event) => {
+  const targetWindow = getWindowForEvent(event);
+  if (targetWindow) {
+    targetWindow.minimize();
+  }
+  return { ok: true };
+});
+ipcMain.handle("window:close", (event) => {
+  const targetWindow = getWindowForEvent(event);
+  if (targetWindow) {
+    targetWindow.close();
+  }
+  return { ok: true };
+});
 ipcMain.handle("notifications:supported", () => Notification.isSupported());
 ipcMain.handle("notifications:show", (_event, payload = {}) => {
   if (!Notification.isSupported()) {
@@ -742,7 +778,7 @@ ipcMain.handle("notifications:show", (_event, payload = {}) => {
   };
 
   const notification = new Notification({
-    title: title || "qwerbentum",
+    title: title || "synto",
     body,
   });
 

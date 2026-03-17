@@ -3,6 +3,16 @@ const socket = io();
 const joinForm = document.getElementById("join-form");
 const serversRailEl = document.getElementById("servers-rail");
 const appTitleEl = document.getElementById("app-title");
+const windowChromeEl = document.getElementById("window-chrome");
+const windowChromeBadgeEl = document.getElementById("window-chrome-badge");
+const windowChromeTitleEl = document.getElementById("window-chrome-title");
+const windowChromeSubtitleEl = document.getElementById("window-chrome-subtitle");
+const windowChromeMetaEl = document.getElementById("window-chrome-meta");
+const windowChromeControlsEl = document.getElementById("window-chrome-controls");
+const windowChromeNetworkEl = document.getElementById("window-chrome-network");
+const windowChromeSecurityEl = document.getElementById("window-chrome-security");
+const windowMinimizeBtn = document.getElementById("window-minimize-btn");
+const windowCloseBtn = document.getElementById("window-close-btn");
 const appSubtitleEl = document.getElementById("app-subtitle");
 const joinHintEl = document.getElementById("join-form-hint");
 const joinSelectedBtn = document.getElementById("join-selected-btn");
@@ -21,7 +31,6 @@ const micSensitivityRange = document.getElementById("mic-sensitivity-range");
 const micSensitivityValue = document.getElementById("mic-sensitivity-value");
 const screenBtn = document.getElementById("screen-btn");
 const leaveVoiceBtn = document.getElementById("leave-voice-btn");
-const previewBtn = document.getElementById("preview-btn");
 const leaveBtn = document.getElementById("leave-btn");
 const remoteAudios = document.getElementById("remote-audios");
 const screensContainer = document.getElementById("screens");
@@ -46,6 +55,14 @@ const homeServerBtn = document.getElementById("home-server-btn");
 const addRoomBtn = document.getElementById("add-room-btn");
 const savedRoomsListEl = document.getElementById("saved-rooms-list");
 const topbarMetaEl = document.getElementById("topbar-meta");
+const topbarVoiceStateWrapEl = document.querySelector(".topbar-voice-state");
+const topbarVoiceStateEl = document.getElementById("topbar-voice-state");
+const topbarMembersCountEl = document.getElementById("topbar-members-count");
+const topbarNetworkChipEl = document.getElementById("topbar-network-chip");
+const topbarNetworkModeEl = document.getElementById("topbar-network-mode");
+const topbarCryptoChipEl = document.getElementById("topbar-crypto-chip");
+const topbarCryptoStateEl = document.getElementById("topbar-crypto-state");
+const topbarProfileBtn = document.getElementById("topbar-profile-btn");
 const participantsTitleEl = document.getElementById("participants-title");
 const screenStreamsTitleEl = document.getElementById("screen-streams-title");
 const profileToggleBtn = document.getElementById("profile-toggle-btn");
@@ -84,10 +101,7 @@ const DEFAULT_RTC_CONFIG = {
   iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
   iceTransportPolicy: "all",
 };
-const PROJECT_NAME = String(document.documentElement?.dataset?.projectName || "VM")
-  .replace(/\s+/g, " ")
-  .trim()
-  .slice(0, 40) || "VM";
+const PROJECT_NAME = "synto";
 const DEFAULT_MIC_AUDIO_PROCESSING_CONSTRAINTS = {
   echoCancellation: true,
   noiseSuppression: true,
@@ -202,10 +216,11 @@ const I18N = {
     pageTitle: "Voice Servers",
     ariaServersRail: "Servers",
     ariaSavedServers: "Saved servers",
-    homeServerTitle: "Voice Messenger",
     addServerTitle: "Add server",
-    appTitle: "Voice Messenger",
     appSubtitle: "First entrant in each voice room becomes host and relays voice + screen.",
+    windowControlsAria: "Window controls",
+    windowMinimize: "Minimize",
+    windowClose: "Close",
     joinHint: "Connect to the selected server from the left rail.",
     joinSelectedServer: "Join Selected Server",
     createServer: "Create Server",
@@ -299,7 +314,6 @@ const I18N = {
     attachmentTooLarge: "File \"{name}\" is too large. Max {max}.",
     attachmentTotalTooLarge: "Total attachment size is too large. Max {max}.",
     attachmentReadFailed: "Failed to read file \"{name}\".",
-    attachmentUploading: "Uploading attachments...",
     chatSendFailed: "Message was not sent.",
     editMessage: "Edit message",
     deleteMessage: "Delete message",
@@ -318,11 +332,6 @@ const I18N = {
     welcomeStepProfile: "Open Profile and set your nickname, microphone, speakers, and theme.",
     welcomeStepVoice: "Join any voice room. The first entrant becomes host for audio and screen relay.",
     welcomeStepChat: "Send text, files, photos, and videos. Media is previewed directly in chat.",
-    welcomeNotesTitle: "Project capabilities",
-    welcomeNoteHistory: "Chat history and attachments are persisted on the server.",
-    welcomeNoteFiles: "Files are accepted regardless of extension.",
-    welcomeNoteSecurity: "Use HTTPS in LAN/public access for stable microphone permissions.",
-    enterApp: "Open Workspace",
     joinServerFirst: "Join server first.",
     roomSuggested: "Room {index}",
     promptVoiceRoomName: "Voice room name",
@@ -343,7 +352,9 @@ const I18N = {
     hostTag: "HOST",
     screenTag: "SCREEN",
     openServer: "Open server {room}",
-    chatEmptyJoin: "Join a server to start chatting.",
+    removeServer: "Remove server {room}",
+    confirmRemoveServer: "Remove saved server \"{room}\"?",
+    serverRemoved: "Server \"{room}\" removed from saved list.",
     chatEmptyNoMessages: "No messages yet. Start the conversation.",
     guest: "Guest",
     mute: "Mute",
@@ -360,8 +371,6 @@ const I18N = {
     rnOffDeferred:
       "RNNoise mode: OFF (live constraint switch rejected by browser; defaults return on next mic capture)",
     volume: "Volume",
-    hideMyPreview: "Hide My Preview",
-    showMyPreview: "Show My Preview",
     youAreSharing: "You are sharing",
     userIsSharing: "{name} is sharing",
     pin: "Pin",
@@ -421,10 +430,11 @@ const I18N = {
     pageTitle: "Голосовые серверы",
     ariaServersRail: "Серверы",
     ariaSavedServers: "Сохраненные серверы",
-    homeServerTitle: "Голосовой мессенджер",
     addServerTitle: "Добавить сервер",
-    appTitle: "Голосовой мессенджер",
     appSubtitle: "Первый вошедший в голосовую комнату становится хостом и ретранслирует голос и экран.",
+    windowControlsAria: "Управление окном",
+    windowMinimize: "Свернуть",
+    windowClose: "Закрыть",
     joinHint: "Подключитесь к выбранному серверу из левой панели.",
     joinSelectedServer: "Подключиться к выбранному серверу",
     createServer: "Создать сервер",
@@ -518,7 +528,6 @@ const I18N = {
     attachmentTooLarge: "Файл \"{name}\" слишком большой. Максимум {max}.",
     attachmentTotalTooLarge: "Суммарный размер вложений слишком большой. Максимум {max}.",
     attachmentReadFailed: "Не удалось прочитать файл \"{name}\".",
-    attachmentUploading: "Загружаем вложения...",
     chatSendFailed: "Сообщение не отправлено.",
     editMessage: "Редактировать сообщение",
     deleteMessage: "Удалить сообщение",
@@ -537,11 +546,6 @@ const I18N = {
     welcomeStepProfile: "Откройте профиль и настройте ник, микрофон, динамики и тему.",
     welcomeStepVoice: "Зайдите в любую голосовую комнату. Первый участник становится хостом ретрансляции.",
     welcomeStepChat: "Отправляйте текст, файлы, фото и видео. Медиа показывается прямо в чате.",
-    welcomeNotesTitle: "Возможности проекта",
-    welcomeNoteHistory: "История чата и вложения сохраняются на сервере.",
-    welcomeNoteFiles: "Разрешена отправка файлов независимо от расширения.",
-    welcomeNoteSecurity: "Для доступа по LAN/интернету используйте HTTPS, чтобы микрофон работал стабильно.",
-    enterApp: "Открыть рабочее пространство",
     joinServerFirst: "Сначала подключитесь к серверу.",
     roomSuggested: "Комната {index}",
     promptVoiceRoomName: "Название голосовой комнаты",
@@ -562,7 +566,9 @@ const I18N = {
     hostTag: "ХОСТ",
     screenTag: "ЭКРАН",
     openServer: "Открыть сервер {room}",
-    chatEmptyJoin: "Подключитесь к серверу, чтобы начать чат.",
+    removeServer: "Удалить сервер {room}",
+    confirmRemoveServer: "Удалить сохранённый сервер «{room}»?",
+    serverRemoved: "Сервер «{room}» удалён из сохранённых.",
     chatEmptyNoMessages: "Пока нет сообщений. Начните разговор.",
     guest: "Гость",
     mute: "Выключить микрофон",
@@ -579,8 +585,6 @@ const I18N = {
     rnOffDeferred:
       "Режим RNNoise: ВЫКЛ (браузер отклонил переключение на лету; настройки по умолчанию вернутся при следующем захвате микрофона)",
     volume: "Громкость",
-    hideMyPreview: "Скрыть мой превью",
-    showMyPreview: "Показать мой превью",
     youAreSharing: "Вы делитесь экраном",
     userIsSharing: "{name} делится экраном",
     pin: "Закрепить",
@@ -641,10 +645,11 @@ const I18N = {
     pageTitle: "Гласовыя серверы",
     ariaServersRail: "Серверы",
     ariaSavedServers: "Сбережены серверы",
-    homeServerTitle: "Гласовъ вестник",
     addServerTitle: "Приложити сервер",
-    appTitle: "Гласовъ вестник",
     appSubtitle: "Первый вшедый в гласову палату бываеть хостом и передаеть глас и екран.",
+    windowControlsAria: "Управление окном",
+    windowMinimize: "Свернути",
+    windowClose: "Затворити",
     joinHint: "Присоединися к избраному серверу от левой стезе.",
     joinSelectedServer: "Внити в избраны сервер",
     createServer: "Створити сервер",
@@ -733,7 +738,6 @@ const I18N = {
     hostTag: "ХОСТ",
     screenTag: "ЕКРАН",
     openServer: "Отворити сервер {room}",
-    chatEmptyJoin: "Вниди в сервер, да начати беседу.",
     chatEmptyNoMessages: "Пока несть вестей. Начни беседу.",
     guest: "Гость",
     mute: "Умолчати микрофон",
@@ -750,8 +754,6 @@ const I18N = {
     rnOffDeferred:
       "Режим RNNoise: ВЫКЛ (браузер отверг живо переключение; по умолчанию возвратится при следущем взятии микрофона)",
     volume: "Громкость",
-    hideMyPreview: "Скрыти мой преглед",
-    showMyPreview: "Показати мой преглед",
     youAreSharing: "Ты делишися екраном",
     userIsSharing: "{name} делится екраном",
     pin: "Прикрепити",
@@ -803,10 +805,11 @@ const I18N = {
     pageTitle: "Servitoria Vocis",
     ariaServersRail: "Servitoria",
     ariaSavedServers: "Servitoria servata",
-    homeServerTitle: "Nuntius Vocis",
     addServerTitle: "Adde servitorium",
-    appTitle: "Nuntius Vocis",
     appSubtitle: "Primus qui intrat cubiculum vocis fit moderator et vocem cum velo transmittit.",
+    windowControlsAria: "Moderamina fenestrae",
+    windowMinimize: "Minue",
+    windowClose: "Claude",
     joinHint: "Coniunge ad servitorium electum e columna sinistra.",
     joinSelectedServer: "Coniunge ad servitorium electum",
     createServer: "Crea servitorium",
@@ -896,7 +899,6 @@ const I18N = {
     hostTag: "MODERATOR",
     screenTag: "VELUM",
     openServer: "Aperi servitorium {room}",
-    chatEmptyJoin: "Coniunge ad servitorium ut colloqui incipias.",
     chatEmptyNoMessages: "Nondum sunt nuntii. Incipe colloquium.",
     guest: "Hospes",
     mute: "Obmutesce",
@@ -913,8 +915,6 @@ const I18N = {
     rnOffDeferred:
       "Modus RNNoise: OFF (mutatio viva a navigatore reiecta; norma ad proximam capturam revertetur)",
     volume: "Volumen",
-    hideMyPreview: "Occulta praevisum meum",
-    showMyPreview: "Ostende praevisum meum",
     youAreSharing: "Tu velum transmittis",
     userIsSharing: "{name} velum transmittit",
     pin: "Fige",
@@ -1028,7 +1028,6 @@ let isMicSensitivityPopoverOpen = false;
 let isDlolmusExperimentalMode = false;
 let isRnNoiseMode = false;
 let pinnedScreenUserId = null;
-let hiddenLocalPreview = false;
 let mobileCarouselIndex = 0;
 let screenSwipeStartX = null;
 const chatMessages = [];
@@ -1097,7 +1096,57 @@ let lastVoiceMemberIds = new Set();
 let voiceCueBaselineReady = false;
 
 function setStatus(text) {
-  statusEl.textContent = text;
+  if (statusEl) {
+    statusEl.textContent = text;
+  }
+  updateWindowChromeMeta(text);
+}
+
+function getNetworkModeShortLabel(modeId) {
+  const normalizedMode = normalizeNetworkModeId(modeId);
+  if (normalizedMode === NETWORK_MODE_RELAY_ID) {
+    return "RLY";
+  }
+  if (normalizedMode === "p2p") {
+    return "P2P";
+  }
+  return "SRV";
+}
+
+function updateWindowChromeMeta(statusOverride = null) {
+  if (!windowChromeEl) {
+    return;
+  }
+
+  const effectiveModeId = normalizeNetworkModeId(
+    roomState?.networkMode || activeBackendNetworkMode || preferredNetworkModeId
+  );
+  const isRelayMode = effectiveModeId === NETWORK_MODE_RELAY_ID;
+  const activeRoomId = normalizeRoomIdValue(roomState?.id);
+  const baseTitle = getProjectName();
+
+  if (windowChromeBadgeEl) {
+    windowChromeBadgeEl.textContent = getProjectBadgeLabel();
+  }
+  if (windowChromeTitleEl) {
+    windowChromeTitleEl.textContent = joined && activeRoomId ? `${baseTitle} · #${activeRoomId}` : baseTitle;
+  }
+  if (windowChromeMetaEl) {
+    windowChromeMetaEl.textContent = joined ? t("topbarMeta") : t("topbarMetaLobby");
+  }
+  if (windowChromeNetworkEl) {
+    windowChromeNetworkEl.textContent = getNetworkModeShortLabel(effectiveModeId);
+  }
+  if (windowChromeSecurityEl) {
+    windowChromeSecurityEl.textContent = isRelayMode ? "AES-GCM" : "PLAIN";
+    windowChromeSecurityEl.classList.toggle("secure", isRelayMode);
+  }
+  if (windowChromeSubtitleEl) {
+    const fallbackStatus = joined ? t("connectedToServer") : t("disconnected");
+    const rawStatus = statusOverride ?? statusEl?.textContent ?? fallbackStatus;
+    const normalizedStatus = String(rawStatus || "").trim() || fallbackStatus;
+    windowChromeSubtitleEl.textContent = normalizedStatus;
+  }
 }
 
 function fillTemplate(template, params = {}) {
@@ -1117,7 +1166,8 @@ function t(key, params = {}) {
   return fillTemplate(template, params);
 }
 
-const IS_ELECTRON_RUNTIME = Boolean(window && window.desktopApp);
+const IS_ELECTRON_UA = /\bElectron\/\d+/i.test(String(window?.navigator?.userAgent || ""));
+const IS_ELECTRON_RUNTIME = Boolean(window && (window.desktopApp || IS_ELECTRON_UA));
 let activeInlineDialogClose = null;
 
 function closeInlineDialogWithResult(result) {
@@ -1664,6 +1714,9 @@ async function initializeNetworkModeSetting() {
 }
 
 function isRelayModeActive() {
+  if (normalizeNetworkModeId(roomState?.networkMode) === NETWORK_MODE_RELAY_ID) {
+    return true;
+  }
   return normalizeNetworkModeId(activeBackendNetworkMode) === NETWORK_MODE_RELAY_ID;
 }
 
@@ -2304,6 +2357,7 @@ async function fetchBackendNetworkMode() {
     activeBackendNetworkMode = normalizeNetworkModeId(preferredNetworkModeId);
   }
 
+  updateTopbarMeta();
   return activeBackendNetworkMode;
 }
 
@@ -2878,6 +2932,25 @@ async function initializeDesktopNotifications() {
   refreshNotificationAutomation({ sync: true });
 }
 
+async function initializeWindowChrome() {
+  if (document?.body) {
+    document.body.classList.toggle("is-electron-runtime", IS_ELECTRON_RUNTIME);
+    document.body.classList.toggle("is-web-runtime", !IS_ELECTRON_RUNTIME);
+  }
+
+  const controlsEnabled = Boolean(window.desktopApp?.minimizeWindow && window.desktopApp?.closeWindow);
+  if (windowMinimizeBtn) {
+    windowMinimizeBtn.disabled = !controlsEnabled;
+  }
+  if (windowCloseBtn) {
+    windowCloseBtn.disabled = !controlsEnabled;
+  }
+
+  if (!IS_ELECTRON_RUNTIME) {
+    return;
+  }
+}
+
 function applyStaticTranslations() {
   document.title = `${getProjectName()} · ${t("pageTitle")}`;
   document.documentElement.setAttribute(
@@ -2899,6 +2972,24 @@ function applyStaticTranslations() {
   if (addRoomBtn) {
     addRoomBtn.title = t("addServerTitle");
     addRoomBtn.setAttribute("aria-label", t("addServerTitle"));
+  }
+  if (windowChromeControlsEl) {
+    windowChromeControlsEl.setAttribute("aria-label", t("windowControlsAria"));
+  }
+  if (windowMinimizeBtn) {
+    const label = t("windowMinimize");
+    windowMinimizeBtn.title = label;
+    windowMinimizeBtn.setAttribute("aria-label", label);
+  }
+  if (windowCloseBtn) {
+    const label = t("windowClose");
+    windowCloseBtn.title = label;
+    windowCloseBtn.setAttribute("aria-label", label);
+  }
+  if (topbarProfileBtn) {
+    topbarProfileBtn.textContent = t("meBadge");
+    topbarProfileBtn.title = t("profile");
+    topbarProfileBtn.setAttribute("aria-label", t("profile"));
   }
   if (appTitleEl) {
     appTitleEl.textContent = getProjectName();
@@ -3000,16 +3091,50 @@ function applyStaticTranslations() {
   if (profileNetworkNoteEl) {
     profileNetworkNoteEl.textContent = getNetworkModeNoteText();
   }
+  updateWindowChromeMeta();
   syncNetworkModeSelector();
   syncNotificationControls();
   renderPendingChatAttachments();
 }
 
 function updateTopbarMeta() {
-  if (!topbarMetaEl) {
-    return;
+  if (topbarMetaEl) {
+    topbarMetaEl.textContent = joined ? t("topbarMeta") : t("topbarMetaLobby");
   }
-  topbarMetaEl.textContent = joined ? t("topbarMeta") : t("topbarMetaLobby");
+
+  const effectiveModeId = normalizeNetworkModeId(
+    roomState?.networkMode || activeBackendNetworkMode || preferredNetworkModeId
+  );
+  const inVoiceChannel = Boolean(getCurrentVoiceChannelId(roomState));
+  const currentVoiceChannel = inVoiceChannel
+    ? getVoiceChannelsFromRoom(roomState).find(
+      (channel) => String(channel?.id || "").trim() === getCurrentVoiceChannelId(roomState)
+    ) || null
+    : null;
+  const membersCount = Array.isArray(roomState?.members) ? roomState.members.length : 0;
+
+  if (topbarVoiceStateEl) {
+    topbarVoiceStateEl.textContent = inVoiceChannel ? getVoiceRoomName(currentVoiceChannel) : "--";
+  }
+  if (topbarMembersCountEl) {
+    topbarMembersCountEl.textContent = String(membersCount);
+  }
+  if (topbarNetworkModeEl) {
+    topbarNetworkModeEl.textContent = getNetworkModeShortLabel(effectiveModeId);
+  }
+  if (topbarCryptoStateEl) {
+    topbarCryptoStateEl.textContent = effectiveModeId === NETWORK_MODE_RELAY_ID ? "AES-GCM" : "PLAIN";
+  }
+  if (topbarVoiceStateWrapEl) {
+    topbarVoiceStateWrapEl.classList.toggle("active", inVoiceChannel);
+  }
+  if (topbarNetworkChipEl) {
+    topbarNetworkChipEl.dataset.mode = effectiveModeId;
+  }
+  if (topbarCryptoChipEl) {
+    topbarCryptoChipEl.classList.toggle("secure", effectiveModeId === NETWORK_MODE_RELAY_ID);
+  }
+  updateWindowChromeMeta();
 }
 
 function applyLanguage(languageId, { persist = true, rerender = true } = {}) {
@@ -3261,13 +3386,16 @@ function getCurrentRoomLabel() {
 
 function updateRoomLabels(roomId = null) {
   const label = String(roomId || getCurrentRoomLabel() || MAIN_PAGE_LABEL);
+  const hudTitle = joined
+    ? `${getProjectName()} · #${label}`
+    : `${getProjectName()}_Launcher`;
 
   if (appTitleEl) {
     appTitleEl.textContent = joined ? label : getProjectName();
   }
 
   if (chatRoomTitleEl) {
-    chatRoomTitleEl.textContent = label;
+    chatRoomTitleEl.textContent = hudTitle;
   }
 
   if (channelRoomLabelEl) {
@@ -3740,6 +3868,35 @@ function ensureSavedRoom(roomId) {
   refreshNotificationAutomation({ sync: true });
 }
 
+function removeSavedRoom(roomId) {
+  const cleanRoomId = normalizeRoomIdValue(roomId);
+  if (!cleanRoomId) {
+    return false;
+  }
+
+  const index = savedRooms.indexOf(cleanRoomId);
+  if (index < 0) {
+    return false;
+  }
+
+  savedRooms.splice(index, 1);
+
+  if (notificationPreviewRoomId === cleanRoomId) {
+    notificationPreviewRoomId = "";
+  }
+
+  const currentInputRoomId = normalizeRoomIdValue(roomInput?.value);
+  if (!joined && currentInputRoomId === cleanRoomId) {
+    const fallbackRoomId = normalizeRoomIdValue(savedRooms[0] || "");
+    roomInput.value = fallbackRoomId;
+    updateRoomLabels(fallbackRoomId || MAIN_PAGE_LABEL);
+  }
+
+  persistSavedRooms();
+  refreshNotificationAutomation({ sync: true });
+  return true;
+}
+
 function roomBadgeLabel(roomId) {
   const clean = String(roomId || "").trim();
   if (!clean) {
@@ -3770,6 +3927,9 @@ function renderSavedRooms() {
 
   savedRoomsListEl.innerHTML = "";
   for (const roomId of savedRooms) {
+    const item = document.createElement("div");
+    item.className = "saved-room-item";
+
     const button = document.createElement("button");
     button.type = "button";
     button.className = "server-icon room-shortcut";
@@ -3791,7 +3951,30 @@ function renderSavedRooms() {
       void requestJoinRoom(roomId);
     });
 
-    savedRoomsListEl.appendChild(button);
+    const removeBtn = document.createElement("button");
+    removeBtn.type = "button";
+    removeBtn.className = "saved-room-remove-btn";
+    removeBtn.textContent = "×";
+    removeBtn.title = t("removeServer", { room: roomId });
+    removeBtn.setAttribute("aria-label", t("removeServer", { room: roomId }));
+    removeBtn.addEventListener("click", async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+
+      const approved = await confirmInput(t("confirmRemoveServer", { room: roomId }));
+      if (!approved) {
+        return;
+      }
+
+      if (removeSavedRoom(roomId)) {
+        renderSavedRooms();
+        setStatus(t("serverRemoved", { room: roomId }));
+      }
+    });
+
+    item.appendChild(button);
+    item.appendChild(removeBtn);
+    savedRoomsListEl.appendChild(item);
   }
 }
 
@@ -4893,19 +5076,6 @@ function isOwnChatMessage(message) {
   );
 }
 
-function canEditChatMessage(message) {
-  if (!isOwnChatMessage(message)) {
-    return false;
-  }
-
-  const createdAt = Number(message.createdAt);
-  if (!Number.isFinite(createdAt) || createdAt <= 0) {
-    return false;
-  }
-
-  return Date.now() - createdAt <= CHAT_EDIT_WINDOW_MS;
-}
-
 function resetChatEditState({ render = false } = {}) {
   activeChatEditMessageId = null;
   chatEditDraftText = "";
@@ -5137,7 +5307,6 @@ function createChatMessageElement(message) {
   meta.appendChild(metaPrimary);
 
   const isOwnMessage = isOwnChatMessage(message);
-  const canEdit = canEditChatMessage(message);
 
   if (isOwnMessage) {
     const actions = document.createElement("div");
@@ -7201,25 +7370,10 @@ function removeVoiceTrack(userId, trackId = null) {
   }
 }
 
-function updatePreviewButton() {
-  if (!previewBtn) {
-    return;
-  }
-
-  if (!localScreenTrack) {
-    previewBtn.classList.add("hidden");
-    previewBtn.textContent = t("hideMyPreview");
-    return;
-  }
-
-  previewBtn.classList.remove("hidden");
-  previewBtn.textContent = hiddenLocalPreview ? t("showMyPreview") : t("hideMyPreview");
-}
-
 function getOrderedScreenItems() {
   const items = [];
 
-  if (localScreenPreview && !hiddenLocalPreview && selfId) {
+  if (localScreenPreview && selfId) {
     items.push({
       userId: selfId,
       track: localScreenPreview.track,
@@ -7451,20 +7605,6 @@ function stepMobileCarousel(step) {
   renderScreens();
 }
 
-function toggleLocalScreenPreviewVisibility() {
-  if (!localScreenTrack) {
-    return;
-  }
-
-  hiddenLocalPreview = !hiddenLocalPreview;
-  if (hiddenLocalPreview && pinnedScreenUserId === selfId) {
-    pinnedScreenUserId = null;
-  }
-
-  updatePreviewButton();
-  renderScreens();
-}
-
 function attachScreenTrack(userId, track) {
   if (userId === selfId) {
     return;
@@ -7492,14 +7632,11 @@ function attachLocalScreenPreview(track) {
   }
 
   removeLocalScreenPreview();
-
-  hiddenLocalPreview = false;
   if (selfId) {
     markScreenStarted(selfId);
   }
   localScreenPreview = { track };
   renderScreens();
-  updatePreviewButton();
 }
 
 function removeLocalScreenPreview() {
@@ -7512,7 +7649,6 @@ function removeLocalScreenPreview() {
     clearScreenDisplayStateForUser(selfId);
   }
   renderScreens();
-  updatePreviewButton();
 }
 
 function removeScreenTrack(userId) {
@@ -7554,7 +7690,6 @@ function updateScreenButton() {
   const sharing = Boolean(localScreenTrack);
   screenBtn.classList.toggle("active", sharing);
   setControlButtonIcon(screenBtn, sharing ? "stop_screen_share" : "present_to_all", sharing ? t("stopScreenShare") : t("shareScreen"));
-  updatePreviewButton();
   updateVoiceControlsAvailability();
 }
 
@@ -8848,7 +8983,6 @@ function resetSessionState() {
   localScreenStream = null;
   localScreenPreview = null;
   pinnedScreenUserId = null;
-  hiddenLocalPreview = false;
   mobileCarouselIndex = 0;
   screenSwipeStartX = null;
   mutedScreenUserIds.clear();
@@ -9158,6 +9292,16 @@ if (addVoiceChannelBtn) {
 
 if (profileToggleBtn) {
   profileToggleBtn.addEventListener("click", () => {
+    const nextOpen = !isProfilePanelOpen;
+    setProfilePanelOpen(nextOpen);
+    if (nextOpen) {
+      void refreshProfileDeviceSelectors();
+    }
+  });
+}
+
+if (topbarProfileBtn) {
+  topbarProfileBtn.addEventListener("click", () => {
     const nextOpen = !isProfilePanelOpen;
     setProfilePanelOpen(nextOpen);
     if (nextOpen) {
@@ -9509,12 +9653,6 @@ if (leaveVoiceBtn) {
   });
 }
 
-if (previewBtn) {
-  previewBtn.addEventListener("click", () => {
-    toggleLocalScreenPreviewVisibility();
-  });
-}
-
 if (screensPrevBtn) {
   screensPrevBtn.addEventListener("click", () => {
     stepMobileCarousel(-1);
@@ -9590,6 +9728,32 @@ leaveBtn.addEventListener("click", async () => {
   resetSessionState();
 });
 
+if (windowMinimizeBtn) {
+  windowMinimizeBtn.addEventListener("click", async () => {
+    if (!IS_ELECTRON_RUNTIME || !window.desktopApp?.minimizeWindow) {
+      return;
+    }
+    try {
+      await window.desktopApp.minimizeWindow();
+    } catch {
+      // no-op
+    }
+  });
+}
+
+if (windowCloseBtn) {
+  windowCloseBtn.addEventListener("click", async () => {
+    if (!IS_ELECTRON_RUNTIME || !window.desktopApp?.closeWindow) {
+      return;
+    }
+    try {
+      await window.desktopApp.closeWindow();
+    } catch {
+      // no-op
+    }
+  });
+}
+
 socket.on("joined-room", async ({ room, selfId: incomingSelfId }) => {
   selfId = incomingSelfId;
   roomState = room;
@@ -9651,6 +9815,7 @@ socket.on("room-state", async (room) => {
   updateRoomLabels(room.id);
   renderVoiceChannels();
   renderSavedRooms();
+  updateTopbarMeta();
 
   if (!joined || !selfId) {
     renderParticipants();
@@ -9764,7 +9929,7 @@ socket.on("peer-left", ({ peerId }) => {
 });
 
 socket.on("chat-message", (message) => {
-  if (isRelayModeActive() && message?.envelope) {
+  if (message?.envelope) {
     void handleRelayChatPacket(message, { fromReplay: false });
     return;
   }
@@ -9782,7 +9947,7 @@ socket.on("saved-room-chat-message", ({ roomId, message } = {}) => {
 });
 
 socket.on("chat-message-updated", (message) => {
-  if (isRelayModeActive() && message?.envelope) {
+  if (message?.envelope) {
     void handleRelayChatPacket(
       {
         roomId: message.roomId || roomState?.id,
@@ -9964,6 +10129,7 @@ micSensitivity = loadMicSensitivity();
 syncMicSensitivityUi();
 void refreshProfileDeviceSelectors();
 void initializeNetworkModeSetting();
+void initializeWindowChrome();
 void initializeDesktopNotifications();
 
 if (hasOpusCodec && hasRedCodec) {

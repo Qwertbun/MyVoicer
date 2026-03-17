@@ -1,5 +1,5 @@
 {
-  "name": "qwerbentum",
+  "name": "synto",
   "version": "1.0.0",
   "description": "Voice messenger desktop/web app with room host as first entrant",
   "main": "electron/main.js",
@@ -27,7 +27,7 @@
     "compact-encoding": "^2.19.0",
     "corestore": "^7.9.1",
     "electron-updater": "^6.6.2",
-    "express": "^4.21.2",
+    "express": "^5.2.1",
     "hyperbee": "^2.27.3",
     "hyperswarm": "^4.17.0",
     "protomux": "^3.10.1",
@@ -44,8 +44,8 @@
   },
   "author": "Qwertbun",
   "build": {
-    "appId": "com.qwertbun.qwerbentum",
-    "productName": "qwerbentum",
+    "appId": "com.qwertbun.synto",
+    "productName": "Synto",
     "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
     "directories": {
       "output": "release"
