@@ -19,7 +19,8 @@
     "cert:renew:le": "powershell -ExecutionPolicy Bypass -File scripts/renew-letsencrypt.ps1",
     "cert:linux:https": "bash scripts/certbot-https-linux.sh run",
     "cert:linux:issue": "bash scripts/certbot-https-linux.sh issue",
-    "start:web:https:3001": "bash scripts/certbot-https-linux.sh start"
+    "start:web:https:3001": "bash scripts/certbot-https-linux.sh start",
+    "up": "bash scripts/update-relay-aes-headless-force.sh"
   },
   "dependencies": {
     "autobase": "^7.27.3",
