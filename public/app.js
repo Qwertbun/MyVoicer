@@ -33,11 +33,28 @@ const screenBtn = document.getElementById("screen-btn");
 const leaveVoiceBtn = document.getElementById("leave-voice-btn");
 const leaveBtn = document.getElementById("leave-btn");
 const remoteAudios = document.getElementById("remote-audios");
-const screensContainer = document.getElementById("screens");
-const screensCarouselNav = document.getElementById("screens-carousel-nav");
-const screensPrevBtn = document.getElementById("screens-prev-btn");
-const screensNextBtn = document.getElementById("screens-next-btn");
-const screensCarouselIndicator = document.getElementById("screens-carousel-indicator");
+const screenHubEl = document.getElementById("screen-hub");
+const screenHubTitleEl = document.getElementById("screen-hub-title");
+const screenHubMetaEl = document.getElementById("screen-hub-meta");
+const screenHubToggleBtn = document.getElementById("screen-hub-toggle-btn");
+const screenStageWrapEl = document.getElementById("screen-stage-wrap");
+const screenStageVideoEl = document.getElementById("screen-stage-video");
+const screenStageEmptyEl = document.getElementById("screen-stage-empty");
+const screenStageEmptyTextEl = document.getElementById("screen-stage-empty-text");
+const screenStageEmptyTriggerBtn = document.getElementById("screen-stage-empty-trigger-btn");
+const screenStageLocalHintEl = document.getElementById("screen-stage-local-hint");
+const screenStageOverlayEl = document.getElementById("screen-stage-overlay");
+const screenStageLiveBadgeEl = document.getElementById("screen-stage-live-badge");
+const screenStageQualityBadgeEl = document.getElementById("screen-stage-quality-badge");
+const screenStageTitleEl = document.getElementById("screen-stage-title");
+const screenStagePinBtn = document.getElementById("screen-stage-pin-btn");
+const screenStageFullscreenBtn = document.getElementById("screen-stage-fullscreen-btn");
+const screenStageMuteBtn = document.getElementById("screen-stage-mute-btn");
+const screenStageAudioControlsEl = document.getElementById("screen-stage-audio-controls");
+const screenStageVolumeLabelEl = document.getElementById("screen-stage-volume-label");
+const screenStageVolumeRangeEl = document.getElementById("screen-stage-volume-range");
+const screenStageVolumeValueEl = document.getElementById("screen-stage-volume-value");
+const screenFilmstripEl = document.getElementById("screen-filmstrip");
 const chatForm = document.getElementById("chat-form");
 const chatInput = document.getElementById("chat-input");
 const chatSendBtn = document.getElementById("chat-send-btn");
@@ -64,7 +81,6 @@ const topbarCryptoChipEl = document.getElementById("topbar-crypto-chip");
 const topbarCryptoStateEl = document.getElementById("topbar-crypto-state");
 const topbarProfileBtn = document.getElementById("topbar-profile-btn");
 const participantsTitleEl = document.getElementById("participants-title");
-const screenStreamsTitleEl = document.getElementById("screen-streams-title");
 const profileToggleBtn = document.getElementById("profile-toggle-btn");
 const profilePanel = document.getElementById("profile-panel");
 const profileTitleEl = document.getElementById("profile-title");
@@ -141,6 +157,7 @@ const PROFILE_BACKGROUND_STORAGE_KEY = "voice_profile_background_v1";
 const PROFILE_NOTIFICATIONS_ENABLED_STORAGE_KEY = "voice_profile_notifications_enabled_v1";
 const PROFILE_NOTIFICATIONS_SAVED_STORAGE_KEY = "voice_profile_notifications_saved_v1";
 const PROFILE_NOTIFICATIONS_MENTIONS_STORAGE_KEY = "voice_profile_notifications_mentions_v1";
+const SCREEN_HUB_COLLAPSED_STORAGE_KEY = "voice_screen_hub_collapsed_v1";
 const CHAT_AUTHOR_ID = loadOrCreateChatAuthorId();
 const DEFAULT_THEME_ID = "dark";
 const DEFAULT_LANGUAGE_ID = "en";
@@ -235,6 +252,25 @@ const I18N = {
     topbarMetaLobby: "Select a server on the left, then connect to unlock chat, voice rooms, and screen sharing.",
     send: "Send",
     participants: "Participants",
+    screenStage: "Screen Stage",
+    screenStageEmpty: "No one is sharing screen right now.",
+    screenStageTriggerShare: "Start Screen Share",
+    screenStageTriggerShareAria: "Start first screen sharing",
+    screenHubCollapse: "Hide Stage",
+    screenHubExpand: "Show Stage",
+    screenHubToggleAria: "Toggle screen stage visibility",
+    screenLocalPreviewHint:
+      "Local preview. To avoid mirror effect, share another window/screen instead of this app/tab.",
+    screenSelfCaptureBlocked:
+      "This app/tab cannot be shared to avoid mirror recursion. Choose another window or the entire screen.",
+    screenHubNoStreams: "No active streams",
+    screenHubStreamCount: "Live streams: {count}",
+    liveBadge: "LIVE",
+    screenQualityAuto: "AUTO",
+    screenQualityHigh: "HIGH",
+    screenQualityMid: "MID",
+    screenQualityLow: "LOW",
+    screenQualitySafe: "SAFE",
     screenStreams: "Screen Streams",
     prev: "Prev",
     next: "Next",
@@ -402,6 +438,20 @@ const I18N = {
     screenSharingStartedNoAudio: "Screen sharing started (video only; browser did not provide screen audio)",
     screenSharingStartedMicKept: "Screen sharing started (video only; microphone kept active).",
     screenSharingStartedWithAudio: "Screen sharing started (with screen audio)",
+    screenPickerOpening: "Opening screen picker...",
+    screenPickerTitle: "Choose a source to share",
+    screenPickerSubtitle: "Select a screen or app window before broadcasting.",
+    screenPickerScreens: "Screens",
+    screenPickerWindows: "Windows",
+    screenPickerIncludeAudio: "Share system/tab audio when available",
+    screenPickerChoose: "Share",
+    screenPickerCancel: "Cancel",
+    screenPickerNoSources: "No shareable sources were found.",
+    screenPickerFailed: "Failed to load screen sources: {details}",
+    screenPickerCanceled: "Screen sharing canceled.",
+    screenPreparingCapture: "Preparing selected source...",
+    screenPublishPending: "Screen captured. Waiting for relay sender...",
+    screenQualityChanged: "Screen quality profile: {profile}",
     screenShareError: "Screen share error: {details}",
     screenSharingStopped: "Screen sharing stopped",
     hostMode: "Host mode: you relay voice and screens",
@@ -449,6 +499,25 @@ const I18N = {
     topbarMetaLobby: "Выберите сервер слева и подключитесь, чтобы открыть чат, голосовые комнаты и трансляции.",
     send: "Отправить",
     participants: "Участники",
+    screenStage: "Экранная сцена",
+    screenStageEmpty: "Сейчас никто не показывает экран.",
+    screenStageTriggerShare: "Запустить демонстрацию",
+    screenStageTriggerShareAria: "Запустить первую демонстрацию экрана",
+    screenHubCollapse: "Скрыть сцену",
+    screenHubExpand: "Показать сцену",
+    screenHubToggleAria: "Переключить видимость экранной сцены",
+    screenLocalPreviewHint:
+      "Локальный предпросмотр. Чтобы избежать эффекта зеркала, выберите другое окно или экран вместо этого приложения/вкладки.",
+    screenSelfCaptureBlocked:
+      "Нельзя показывать текущее приложение/вкладку из-за зеркальной рекурсии. Выберите другое окно или весь экран.",
+    screenHubNoStreams: "Нет активных трансляций",
+    screenHubStreamCount: "Активных трансляций: {count}",
+    liveBadge: "LIVE",
+    screenQualityAuto: "AUTO",
+    screenQualityHigh: "ВЫСОКО",
+    screenQualityMid: "СРЕДНЕ",
+    screenQualityLow: "НИЗКО",
+    screenQualitySafe: "SAFE",
     screenStreams: "Трансляции экрана",
     prev: "Назад",
     next: "Далее",
@@ -616,6 +685,20 @@ const I18N = {
     screenSharingStartedNoAudio: "Показ экрана запущен (только видео; браузер не дал звук экрана)",
     screenSharingStartedMicKept: "Показ экрана запущен (только видео; микрофон оставлен активным).",
     screenSharingStartedWithAudio: "Показ экрана запущен (со звуком экрана)",
+    screenPickerOpening: "Открываем выбор источника...",
+    screenPickerTitle: "Выберите источник для показа",
+    screenPickerSubtitle: "Выберите экран или окно приложения перед трансляцией.",
+    screenPickerScreens: "Экраны",
+    screenPickerWindows: "Окна",
+    screenPickerIncludeAudio: "Передавать системный/вкладочный звук, если доступен",
+    screenPickerChoose: "Поделиться",
+    screenPickerCancel: "Отмена",
+    screenPickerNoSources: "Не найдено доступных источников для показа.",
+    screenPickerFailed: "Не удалось получить список источников: {details}",
+    screenPickerCanceled: "Показ экрана отменён.",
+    screenPreparingCapture: "Подготавливаем выбранный источник...",
+    screenPublishPending: "Экран захвачен. Ждём готовности relay-отправителя...",
+    screenQualityChanged: "Профиль качества экрана: {profile}",
     screenShareError: "Ошибка показа экрана: {details}",
     screenSharingStopped: "Показ экрана остановлен",
     hostMode: "Режим хоста: вы ретранслируете голос и экраны",
@@ -996,11 +1079,19 @@ const SPEAKING_LEVEL_SMOOTHING = 0.34;
 const SPEAKING_LEVEL_ON_THRESHOLD = 0.028;
 const SPEAKING_LEVEL_OFF_THRESHOLD = 0.016;
 const SPEAKING_HOLD_MS = 340;
+const CAPTURE_HANDLE_TOKEN = "synto-screen-share-handle";
 
 let rtcConfig = { ...DEFAULT_RTC_CONFIG };
 
 const localHosts = new Set(["localhost", "127.0.0.1", "[::1]"]);
-const mobileScreensQuery = window.matchMedia("(max-width: 760px)");
+const SCREEN_ABR_INTERVAL_MS = 2000;
+const SCREEN_QUALITY_PROFILE_PRESETS = Object.freeze({
+  high: { id: "high", maxBitrate: 2500000, maxFramerate: 30, scaleResolutionDownBy: 1 },
+  mid: { id: "mid", maxBitrate: 1600000, maxFramerate: 24, scaleResolutionDownBy: 1.25 },
+  low: { id: "low", maxBitrate: 900000, maxFramerate: 20, scaleResolutionDownBy: 1.8 },
+  safe: { id: "safe", maxBitrate: 450000, maxFramerate: 15, scaleResolutionDownBy: 2.6 },
+});
+const SCREEN_QUALITY_PROFILE_ORDER = ["high", "mid", "low", "safe"];
 const SAVED_ROOMS_STORAGE_KEY = "voice_messenger_saved_rooms_v1";
 const MAX_SAVED_ROOMS = 24;
 const SETTINGS_TAB_GENERAL_ID = "general";
@@ -1028,8 +1119,17 @@ let isMicSensitivityPopoverOpen = false;
 let isDlolmusExperimentalMode = false;
 let isRnNoiseMode = false;
 let pinnedScreenUserId = null;
-let mobileCarouselIndex = 0;
-let screenSwipeStartX = null;
+let activeScreenUserId = null;
+let activeScreenSourceTrackId = null;
+let activeScreenStageItem = null;
+let localScreenPublishPending = false;
+let localScreenLastPublishHostId = null;
+let localScreenLastPublishedAudioTrackId = null;
+let localScreenQualityProfileId = "high";
+let localScreenQualityUpdatedAt = 0;
+let localScreenLikelySelfCapture = false;
+let screenPickerOpen = false;
+let isScreenHubCollapsed = loadScreenHubCollapsedPreference();
 const chatMessages = [];
 const chatMessageIds = new Set();
 const pendingChatAttachments = [];
@@ -1080,12 +1180,15 @@ const screenAudioVolumes = new Map();
 const mutedScreenUserIds = new Set();
 const screenStartedAtByUserId = new Map();
 const screenAudioTrackIdsBySource = new Map();
+const screenSenderAbrStateByKey = new Map();
 const speakingStateByUserId = new Map();
 const speakingUserIds = new Set();
 const notificationCheckpoints = new Map();
 const processedNotificationMessageIds = [];
 const processedNotificationMessageIdSet = new Set();
 let speakingDetectionTimer = null;
+let screenAbrTimer = null;
+let screenAbrTickInFlight = false;
 let playbackContext = null;
 let micProcessingContext = null;
 let micProcessingInputNode = null;
@@ -1100,6 +1203,65 @@ function setStatus(text) {
     statusEl.textContent = text;
   }
   updateWindowChromeMeta(text);
+}
+
+function syncMobileViewportHeightVar() {
+  if (typeof window === "undefined" || !document?.documentElement) {
+    return;
+  }
+
+  const visualViewportHeight = Number(window.visualViewport?.height);
+  const fallbackHeight = Number(window.innerHeight);
+  const measuredHeight = Number.isFinite(visualViewportHeight) && visualViewportHeight > 0
+    ? visualViewportHeight
+    : fallbackHeight;
+
+  if (!Number.isFinite(measuredHeight) || measuredHeight <= 0) {
+    return;
+  }
+
+  const clampedHeight = Math.max(320, Math.round(measuredHeight));
+  document.documentElement.style.setProperty("--app-mobile-vh", `${clampedHeight}px`);
+}
+
+function loadScreenHubCollapsedPreference() {
+  try {
+    const raw = localStorage.getItem(SCREEN_HUB_COLLAPSED_STORAGE_KEY);
+    if (raw === null) {
+      return true;
+    }
+    return raw === "1";
+  } catch {
+    return true;
+  }
+}
+
+function persistScreenHubCollapsedPreference() {
+  try {
+    localStorage.setItem(SCREEN_HUB_COLLAPSED_STORAGE_KEY, isScreenHubCollapsed ? "1" : "0");
+  } catch {
+    // no-op
+  }
+}
+
+function updateScreenHubToggleButton() {
+  if (!screenHubToggleBtn) {
+    return;
+  }
+  screenHubToggleBtn.textContent = isScreenHubCollapsed ? t("screenHubExpand") : t("screenHubCollapse");
+  screenHubToggleBtn.setAttribute("aria-label", t("screenHubToggleAria"));
+  screenHubToggleBtn.setAttribute("aria-expanded", String(!isScreenHubCollapsed));
+}
+
+function setScreenHubCollapsed(nextCollapsed, { persist = true } = {}) {
+  isScreenHubCollapsed = Boolean(nextCollapsed);
+  if (screenHubEl) {
+    screenHubEl.classList.toggle("is-collapsed", isScreenHubCollapsed);
+  }
+  updateScreenHubToggleButton();
+  if (persist) {
+    persistScreenHubCollapsedPreference();
+  }
 }
 
 function getNetworkModeShortLabel(modeId) {
@@ -1169,11 +1331,20 @@ function t(key, params = {}) {
 const IS_ELECTRON_UA = /\bElectron\/\d+/i.test(String(window?.navigator?.userAgent || ""));
 const IS_ELECTRON_RUNTIME = Boolean(window && (window.desktopApp || IS_ELECTRON_UA));
 let activeInlineDialogClose = null;
+let activeScreenPickerClose = null;
 
 function closeInlineDialogWithResult(result) {
   if (typeof activeInlineDialogClose === "function") {
     const closer = activeInlineDialogClose;
     activeInlineDialogClose = null;
+    closer(result);
+  }
+}
+
+function closeScreenPickerDialogWithResult(result = null) {
+  if (typeof activeScreenPickerClose === "function") {
+    const closer = activeScreenPickerClose;
+    activeScreenPickerClose = null;
     closer(result);
   }
 }
@@ -1305,6 +1476,279 @@ async function confirmInput(message) {
     mode: "confirm",
     message,
   });
+}
+
+function canUseElectronScreenPicker() {
+  return Boolean(
+    IS_ELECTRON_RUNTIME &&
+      window.desktopApp?.listDisplaySources &&
+      window.desktopApp?.prepareDisplayCapture
+  );
+}
+
+function normalizeDisplaySourceType(source) {
+  const type = String(source?.type || "").toLowerCase();
+  if (type === "window") {
+    return "window";
+  }
+  return "screen";
+}
+
+function createScreenPickerDialog(sources) {
+  return new Promise((resolve) => {
+    closeScreenPickerDialogWithResult(null);
+
+    if (!Array.isArray(sources) || sources.length === 0) {
+      resolve(null);
+      return;
+    }
+
+    const grouped = {
+      screen: sources.filter((source) => normalizeDisplaySourceType(source) === "screen"),
+      window: sources.filter((source) => normalizeDisplaySourceType(source) === "window"),
+    };
+
+    let activeTab = grouped.screen.length > 0 ? "screen" : "window";
+    let selectedSourceId =
+      grouped[activeTab][0]?.id || grouped.screen[0]?.id || grouped.window[0]?.id || "";
+    let withAudio = true;
+
+    const overlay = document.createElement("div");
+    overlay.className = "screen-picker-overlay";
+    overlay.setAttribute("role", "presentation");
+
+    const dialog = document.createElement("section");
+    dialog.className = "screen-picker-dialog";
+    dialog.setAttribute("role", "dialog");
+    dialog.setAttribute("aria-modal", "true");
+    dialog.setAttribute("aria-label", t("screenPickerTitle"));
+
+    const title = document.createElement("h3");
+    title.className = "screen-picker-title";
+    title.textContent = t("screenPickerTitle");
+
+    const subtitle = document.createElement("p");
+    subtitle.className = "screen-picker-subtitle";
+    subtitle.textContent = t("screenPickerSubtitle");
+
+    const tabs = document.createElement("div");
+    tabs.className = "screen-picker-tabs";
+
+    const screensTabBtn = document.createElement("button");
+    screensTabBtn.type = "button";
+    screensTabBtn.className = "screen-picker-tab";
+    screensTabBtn.textContent = t("screenPickerScreens");
+
+    const windowsTabBtn = document.createElement("button");
+    windowsTabBtn.type = "button";
+    windowsTabBtn.className = "screen-picker-tab";
+    windowsTabBtn.textContent = t("screenPickerWindows");
+
+    tabs.appendChild(screensTabBtn);
+    tabs.appendChild(windowsTabBtn);
+
+    const grid = document.createElement("div");
+    grid.className = "screen-picker-grid";
+
+    const audioRow = document.createElement("label");
+    audioRow.className = "screen-picker-audio";
+    const audioToggle = document.createElement("input");
+    audioToggle.type = "checkbox";
+    audioToggle.checked = true;
+    const audioText = document.createElement("span");
+    audioText.textContent = t("screenPickerIncludeAudio");
+    audioRow.appendChild(audioToggle);
+    audioRow.appendChild(audioText);
+
+    const actions = document.createElement("div");
+    actions.className = "screen-picker-actions";
+    const cancelBtn = document.createElement("button");
+    cancelBtn.type = "button";
+    cancelBtn.className = "screen-picker-btn cancel";
+    cancelBtn.textContent = t("screenPickerCancel");
+
+    const chooseBtn = document.createElement("button");
+    chooseBtn.type = "button";
+    chooseBtn.className = "screen-picker-btn confirm";
+    chooseBtn.textContent = t("screenPickerChoose");
+
+    actions.appendChild(cancelBtn);
+    actions.appendChild(chooseBtn);
+
+    dialog.appendChild(title);
+    dialog.appendChild(subtitle);
+    dialog.appendChild(tabs);
+    dialog.appendChild(grid);
+    dialog.appendChild(audioRow);
+    dialog.appendChild(actions);
+    overlay.appendChild(dialog);
+
+    const currentList = () => grouped[activeTab] || [];
+
+    const syncTabs = () => {
+      screensTabBtn.classList.toggle("active", activeTab === "screen");
+      windowsTabBtn.classList.toggle("active", activeTab === "window");
+      screensTabBtn.disabled = grouped.screen.length === 0;
+      windowsTabBtn.disabled = grouped.window.length === 0;
+    };
+
+    const syncGrid = () => {
+      const list = currentList();
+      if (!list.some((item) => String(item.id) === String(selectedSourceId))) {
+        selectedSourceId = list[0]?.id || "";
+      }
+
+      grid.innerHTML = "";
+      if (list.length === 0) {
+        const empty = document.createElement("p");
+        empty.className = "screen-picker-empty";
+        empty.textContent = t("screenPickerNoSources");
+        grid.appendChild(empty);
+        chooseBtn.disabled = true;
+        return;
+      }
+
+      for (const source of list) {
+        const card = document.createElement("button");
+        card.type = "button";
+        card.className = "screen-picker-source";
+        if (String(source.id) === String(selectedSourceId)) {
+          card.classList.add("is-selected");
+        }
+
+        const image = document.createElement("img");
+        image.className = "screen-picker-thumb";
+        image.alt = String(source.name || "Source");
+        image.src =
+          source.thumbnailDataUrl ||
+          "data:image/gif;base64,R0lGODlhAQABAAAAACwAAAAAAQABAAA=";
+        image.loading = "eager";
+
+        const name = document.createElement("span");
+        name.className = "screen-picker-name";
+        name.textContent = String(source.name || "Display source");
+
+        card.appendChild(image);
+        card.appendChild(name);
+        card.addEventListener("click", () => {
+          selectedSourceId = String(source.id);
+          syncGrid();
+        });
+        grid.appendChild(card);
+      }
+
+      chooseBtn.disabled = !selectedSourceId;
+    };
+
+    const finish = (result) => {
+      document.removeEventListener("keydown", onKeyDown, true);
+      if (overlay.isConnected) {
+        overlay.remove();
+      }
+      activeScreenPickerClose = null;
+      screenPickerOpen = false;
+      resolve(result);
+    };
+
+    const onKeyDown = (event) => {
+      if (!overlay.isConnected) {
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        finish(null);
+        return;
+      }
+      if (event.key === "Enter" && !event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey) {
+        event.preventDefault();
+        if (selectedSourceId) {
+          finish({
+            sourceId: selectedSourceId,
+            withAudio,
+          });
+        }
+      }
+    };
+
+    screensTabBtn.addEventListener("click", () => {
+      if (grouped.screen.length === 0) {
+        return;
+      }
+      activeTab = "screen";
+      syncTabs();
+      syncGrid();
+    });
+    windowsTabBtn.addEventListener("click", () => {
+      if (grouped.window.length === 0) {
+        return;
+      }
+      activeTab = "window";
+      syncTabs();
+      syncGrid();
+    });
+    audioToggle.addEventListener("change", () => {
+      withAudio = Boolean(audioToggle.checked);
+    });
+    cancelBtn.addEventListener("click", () => {
+      finish(null);
+    });
+    chooseBtn.addEventListener("click", () => {
+      if (!selectedSourceId) {
+        return;
+      }
+      finish({
+        sourceId: selectedSourceId,
+        withAudio,
+      });
+    });
+    overlay.addEventListener("click", (event) => {
+      if (event.target === overlay) {
+        finish(null);
+      }
+    });
+
+    screenPickerOpen = true;
+    activeScreenPickerClose = finish;
+    document.addEventListener("keydown", onKeyDown, true);
+    document.body.appendChild(overlay);
+    syncTabs();
+    syncGrid();
+    requestAnimationFrame(() => {
+      chooseBtn.focus();
+    });
+  });
+}
+
+async function pickDisplaySourceForElectron() {
+  if (!canUseElectronScreenPicker()) {
+    return null;
+  }
+
+  let rawSources = [];
+  try {
+    rawSources = await window.desktopApp.listDisplaySources();
+  } catch (error) {
+    setStatus(t("screenPickerFailed", { details: error?.message || error?.name || "UnknownError" }));
+    return null;
+  }
+
+  const sources = Array.isArray(rawSources)
+    ? rawSources
+        .map((item) => ({
+          id: String(item?.id || ""),
+          name: String(item?.name || "").trim() || "Display source",
+          type: normalizeDisplaySourceType(item),
+          thumbnailDataUrl: String(item?.thumbnailDataUrl || ""),
+        }))
+        .filter((item) => item.id)
+    : [];
+
+  if (sources.length === 0) {
+    setStatus(t("screenPickerNoSources"));
+    return null;
+  }
+
+  return createScreenPickerDialog(sources);
 }
 
 function getProjectName() {
@@ -3040,16 +3484,41 @@ function applyStaticTranslations() {
   if (participantsTitleEl) {
     participantsTitleEl.textContent = t("participants");
   }
-  if (screenStreamsTitleEl) {
-    screenStreamsTitleEl.textContent = t("screenStreams");
+  if (screenHubTitleEl) {
+    screenHubTitleEl.textContent = t("screenStage");
   }
-  if (screensPrevBtn) {
-    screensPrevBtn.textContent = t("prev");
-    screensPrevBtn.setAttribute("aria-label", t("prevScreenStream"));
+  if (screenHubToggleBtn) {
+    updateScreenHubToggleButton();
   }
-  if (screensNextBtn) {
-    screensNextBtn.textContent = t("next");
-    screensNextBtn.setAttribute("aria-label", t("nextScreenStream"));
+  if (screenStageEmptyTextEl) {
+    screenStageEmptyTextEl.textContent = t("screenStageEmpty");
+  } else if (screenStageEmptyEl) {
+    screenStageEmptyEl.textContent = t("screenStageEmpty");
+  }
+  if (screenStageEmptyTriggerBtn) {
+    screenStageEmptyTriggerBtn.textContent = t("screenStageTriggerShare");
+    screenStageEmptyTriggerBtn.setAttribute("aria-label", t("screenStageTriggerShareAria"));
+  }
+  if (screenStageLocalHintEl) {
+    screenStageLocalHintEl.textContent = t("screenLocalPreviewHint");
+  }
+  if (screenStageLiveBadgeEl) {
+    screenStageLiveBadgeEl.textContent = t("liveBadge");
+  }
+  if (screenStagePinBtn) {
+    screenStagePinBtn.textContent = t("pin");
+    screenStagePinBtn.setAttribute("aria-label", t("pinScreenStream"));
+  }
+  if (screenStageFullscreenBtn) {
+    screenStageFullscreenBtn.textContent = t("fullscreen");
+    screenStageFullscreenBtn.setAttribute("aria-label", t("openFullscreen"));
+  }
+  if (screenStageMuteBtn) {
+    screenStageMuteBtn.textContent = t("muteAudio");
+    screenStageMuteBtn.setAttribute("aria-label", t("muteThisScreenAudio"));
+  }
+  if (screenStageVolumeLabelEl) {
+    screenStageVolumeLabelEl.textContent = t("musicVolume");
   }
   if (profileToggleBtn) {
     profileToggleBtn.title = t("profile");
@@ -6264,6 +6733,87 @@ function applyVoiceTrackHints(track) {
   }
 }
 
+function applyScreenTrackHints(track) {
+  if (!track) {
+    return;
+  }
+
+  if ("contentHint" in track) {
+    try {
+      track.contentHint = "detail";
+    } catch {
+      // no-op
+    }
+  }
+}
+
+function isLikelySelfScreenCaptureTrack(track) {
+  if (!track || track.kind !== "video") {
+    return false;
+  }
+
+  if (typeof track.getCaptureHandle === "function") {
+    try {
+      const captureHandle = track.getCaptureHandle();
+      const handleValue = String(captureHandle?.handle || "").toLowerCase();
+      const originValue = String(captureHandle?.origin || "").toLowerCase();
+      const currentOrigin = String(globalThis?.location?.origin || "").toLowerCase();
+      if (handleValue === CAPTURE_HANDLE_TOKEN) {
+        return true;
+      }
+      if (handleValue && handleValue.includes(CAPTURE_HANDLE_TOKEN)) {
+        return true;
+      }
+      if (originValue && currentOrigin && originValue === currentOrigin && handleValue) {
+        return true;
+      }
+    } catch {
+      // no-op
+    }
+  }
+
+  const settings =
+    typeof track.getSettings === "function" ? track.getSettings() || {} : {};
+  const displaySurface = String(settings.displaySurface || "").toLowerCase();
+  const isBrowserSurface = displaySurface === "browser";
+
+  const label = String(track.label || "").toLowerCase();
+  if (!label) {
+    return false;
+  }
+
+  const host = String(globalThis?.location?.host || "").toLowerCase();
+  const documentTitle = String(globalThis?.document?.title || "").toLowerCase();
+  const projectName = String(getProjectName() || "").toLowerCase();
+  const markers = [projectName, host].filter(Boolean);
+  if (markers.some((marker) => label.includes(marker))) {
+    return true;
+  }
+
+  if (isBrowserSurface && documentTitle && label.includes(documentTitle)) {
+    return true;
+  }
+
+  return false;
+}
+
+function configureSelfCaptureHandle() {
+  const mediaDevices = globalThis?.navigator?.mediaDevices;
+  if (!mediaDevices || typeof mediaDevices.setCaptureHandleConfig !== "function") {
+    return;
+  }
+
+  try {
+    mediaDevices.setCaptureHandleConfig({
+      handle: CAPTURE_HANDLE_TOKEN,
+      exposeOrigin: true,
+      permittedOrigins: ["*"],
+    });
+  } catch {
+    // no-op
+  }
+}
+
 async function optimizeAudioSender(sender) {
   if (
     !sender ||
@@ -6294,6 +6844,288 @@ async function optimizeAudioSender(sender) {
     await sender.setParameters(params);
   } catch {
     // Browser may not support all RTP sender tuning knobs.
+  }
+}
+
+function getScreenProfileIndex(profileId) {
+  const index = SCREEN_QUALITY_PROFILE_ORDER.indexOf(profileId);
+  return index === -1 ? 0 : index;
+}
+
+function getProfileIdByIndex(index) {
+  const clamped = clamp(index, 0, SCREEN_QUALITY_PROFILE_ORDER.length - 1);
+  return SCREEN_QUALITY_PROFILE_ORDER[clamped] || "high";
+}
+
+function computeLocalScreenQualityProfileId() {
+  if (!localScreenTrack) {
+    return "high";
+  }
+
+  let worstIndex = 0;
+  for (const state of screenSenderAbrStateByKey.values()) {
+    if (!state || !state.isLocalPublisher) {
+      continue;
+    }
+    worstIndex = Math.max(worstIndex, getScreenProfileIndex(state.profileId));
+  }
+
+  return getProfileIdByIndex(worstIndex);
+}
+
+function syncLocalScreenQualityProfileFromAbr() {
+  const nextProfileId = computeLocalScreenQualityProfileId();
+  if (localScreenQualityProfileId === nextProfileId) {
+    return;
+  }
+
+  localScreenQualityProfileId = nextProfileId;
+  renderScreens();
+}
+
+function ensureScreenAbrLoop() {
+  if (screenAbrTimer || screenSenderAbrStateByKey.size === 0) {
+    return;
+  }
+
+  screenAbrTimer = setInterval(() => {
+    void tickScreenAbrLoop();
+  }, SCREEN_ABR_INTERVAL_MS);
+}
+
+function stopScreenAbrLoop() {
+  if (screenAbrTimer) {
+    clearInterval(screenAbrTimer);
+    screenAbrTimer = null;
+  }
+  screenAbrTickInFlight = false;
+}
+
+function unregisterScreenSenderAbrByPrefix(prefix) {
+  const cleanPrefix = String(prefix || "");
+  if (!cleanPrefix) {
+    return;
+  }
+  for (const key of Array.from(screenSenderAbrStateByKey.keys())) {
+    if (key.startsWith(cleanPrefix)) {
+      screenSenderAbrStateByKey.delete(key);
+    }
+  }
+  if (screenSenderAbrStateByKey.size === 0) {
+    stopScreenAbrLoop();
+  }
+  syncLocalScreenQualityProfileFromAbr();
+}
+
+function registerScreenSenderAbr(key, sender, options = {}) {
+  const cleanKey = String(key || "").trim();
+  if (!cleanKey) {
+    return;
+  }
+
+  if (!sender || sender.track?.kind !== "video") {
+    screenSenderAbrStateByKey.delete(cleanKey);
+    if (screenSenderAbrStateByKey.size === 0) {
+      stopScreenAbrLoop();
+    }
+    syncLocalScreenQualityProfileFromAbr();
+    return;
+  }
+
+  const previous = screenSenderAbrStateByKey.get(cleanKey);
+  screenSenderAbrStateByKey.set(cleanKey, {
+    key: cleanKey,
+    sender,
+    profileId: previous?.profileId || "high",
+    stableTicks: previous?.stableTicks || 0,
+    lastPacketsLost: previous?.lastPacketsLost || 0,
+    lastPacketsReceived: previous?.lastPacketsReceived || 0,
+    sourcePeerId: options.sourcePeerId || previous?.sourcePeerId || null,
+    targetPeerId: options.targetPeerId || previous?.targetPeerId || null,
+    isLocalPublisher:
+      typeof options.isLocalPublisher === "boolean"
+        ? options.isLocalPublisher
+        : Boolean(previous?.isLocalPublisher),
+  });
+  const state = screenSenderAbrStateByKey.get(cleanKey);
+  if (state) {
+    void applyScreenProfileToSender(state, state.profileId);
+  }
+  ensureScreenAbrLoop();
+  syncLocalScreenQualityProfileFromAbr();
+}
+
+function unregisterScreenSenderAbr(key) {
+  const cleanKey = String(key || "").trim();
+  if (!cleanKey) {
+    return;
+  }
+
+  screenSenderAbrStateByKey.delete(cleanKey);
+  if (screenSenderAbrStateByKey.size === 0) {
+    stopScreenAbrLoop();
+  }
+  syncLocalScreenQualityProfileFromAbr();
+}
+
+async function collectScreenSenderStats(sender) {
+  if (!sender || typeof sender.getStats !== "function") {
+    return null;
+  }
+
+  const report = await sender.getStats();
+  let outbound = null;
+  let remoteInbound = null;
+  let candidatePair = null;
+
+  report.forEach((stat) => {
+    if (stat.type === "outbound-rtp" && !stat.isRemote && stat.kind === "video") {
+      outbound = stat;
+    }
+    if (stat.type === "remote-inbound-rtp" && stat.kind === "video") {
+      remoteInbound = stat;
+    }
+    if (stat.type === "candidate-pair" && stat.state === "succeeded" && typeof stat.currentRoundTripTime === "number") {
+      candidatePair = stat;
+    }
+  });
+
+  if (!outbound) {
+    return null;
+  }
+
+  return {
+    packetsLost: Number(remoteInbound?.packetsLost || 0),
+    packetsReceived: Number(remoteInbound?.packetsReceived || 0),
+    framesPerSecond: Number(outbound?.framesPerSecond || 0),
+    frameWidth: Number(outbound?.frameWidth || 0),
+    frameHeight: Number(outbound?.frameHeight || 0),
+    qualityLimitationReason: String(outbound?.qualityLimitationReason || "none"),
+    rtt:
+      typeof remoteInbound?.roundTripTime === "number"
+        ? Number(remoteInbound.roundTripTime)
+        : Number(candidatePair?.currentRoundTripTime || 0),
+  };
+}
+
+function deriveNextScreenProfileId(state, stats) {
+  const lossDelta = Math.max(0, stats.packetsLost - state.lastPacketsLost);
+  const recvDelta = Math.max(0, stats.packetsReceived - state.lastPacketsReceived);
+  const totalDelta = lossDelta + recvDelta;
+  const lossRatio = totalDelta > 0 ? lossDelta / totalDelta : 0;
+  const rtt = Number.isFinite(stats.rtt) ? Math.max(0, stats.rtt) : 0;
+  const fps = Number.isFinite(stats.framesPerSecond) ? Math.max(0, stats.framesPerSecond) : 0;
+  const reason = String(stats.qualityLimitationReason || "none").toLowerCase();
+
+  let nextIndex = getScreenProfileIndex(state.profileId);
+
+  const severe = lossRatio >= 0.15 || rtt >= 0.55 || reason === "bandwidth";
+  const degraded = lossRatio >= 0.07 || rtt >= 0.34 || reason === "cpu" || (fps > 0 && fps < 15);
+  const healthy = lossRatio <= 0.02 && rtt > 0 && rtt <= 0.22 && reason === "none" && fps >= 20;
+
+  if (severe) {
+    nextIndex = Math.min(SCREEN_QUALITY_PROFILE_ORDER.length - 1, nextIndex + 2);
+    state.stableTicks = 0;
+  } else if (degraded) {
+    nextIndex = Math.min(SCREEN_QUALITY_PROFILE_ORDER.length - 1, nextIndex + 1);
+    state.stableTicks = 0;
+  } else if (healthy) {
+    state.stableTicks += 1;
+    if (state.stableTicks >= 3) {
+      nextIndex = Math.max(0, nextIndex - 1);
+      state.stableTicks = 0;
+    }
+  } else {
+    state.stableTicks = 0;
+  }
+
+  state.lastPacketsLost = stats.packetsLost;
+  state.lastPacketsReceived = stats.packetsReceived;
+
+  return getProfileIdByIndex(nextIndex);
+}
+
+async function applyScreenProfileToSender(state, profileId) {
+  const profile = SCREEN_QUALITY_PROFILE_PRESETS[profileId];
+  if (!profile || !state?.sender) {
+    return false;
+  }
+
+  const sender = state.sender;
+  if (typeof sender.getParameters !== "function" || typeof sender.setParameters !== "function") {
+    state.profileId = profileId;
+    return false;
+  }
+
+  try {
+    const params = sender.getParameters() || {};
+    const encodings =
+      Array.isArray(params.encodings) && params.encodings.length > 0 ? params.encodings : [{}];
+    const primary = { ...encodings[0] };
+    primary.maxBitrate = profile.maxBitrate;
+    primary.maxFramerate = profile.maxFramerate;
+    primary.scaleResolutionDownBy = profile.scaleResolutionDownBy;
+    params.encodings = [primary, ...encodings.slice(1)];
+    await sender.setParameters(params);
+  } catch {
+    // Some browsers expose a subset of sender parameters.
+  }
+
+  if (state.profileId !== profileId) {
+    state.profileId = profileId;
+
+    if (state.isLocalPublisher) {
+      const now = Date.now();
+      const canNotify = now - localScreenQualityUpdatedAt > 3500;
+      localScreenQualityUpdatedAt = now;
+      syncLocalScreenQualityProfileFromAbr();
+      if (canNotify) {
+        setStatus(t("screenQualityChanged", { profile: getScreenQualityLabel(profileId) }));
+      }
+    }
+  }
+
+  return true;
+}
+
+async function tickScreenAbrLoop() {
+  if (screenAbrTickInFlight) {
+    return;
+  }
+
+  if (screenSenderAbrStateByKey.size === 0) {
+    stopScreenAbrLoop();
+    return;
+  }
+
+  screenAbrTickInFlight = true;
+  try {
+    for (const [key, state] of Array.from(screenSenderAbrStateByKey.entries())) {
+      if (!state?.sender || state.sender.track?.kind !== "video") {
+        screenSenderAbrStateByKey.delete(key);
+        continue;
+      }
+
+      try {
+        const stats = await collectScreenSenderStats(state.sender);
+        if (!stats) {
+          continue;
+        }
+
+        const nextProfileId = deriveNextScreenProfileId(state, stats);
+        if (nextProfileId !== state.profileId) {
+          await applyScreenProfileToSender(state, nextProfileId);
+        }
+      } catch {
+        // Ignore per-sender stats errors.
+      }
+    }
+  } finally {
+    screenAbrTickInFlight = false;
+    if (screenSenderAbrStateByKey.size === 0) {
+      stopScreenAbrLoop();
+    }
+    syncLocalScreenQualityProfileFromAbr();
   }
 }
 
@@ -6549,10 +7381,11 @@ function clearScreenDisplayStateForUser(userId) {
   if (pinnedScreenUserId === userId) {
     pinnedScreenUserId = null;
   }
-}
-
-function isMobileScreensMode() {
-  return mobileScreensQuery.matches;
+  if (activeScreenUserId === userId) {
+    activeScreenUserId = null;
+    activeScreenSourceTrackId = null;
+    activeScreenStageItem = null;
+  }
 }
 
 function isUserSpeaking(userId) {
@@ -7409,23 +8242,268 @@ function getOrderedScreenItems() {
   return items;
 }
 
-function updateScreensCarouselNav(enabled, total) {
-  if (!screensCarouselNav || !screensPrevBtn || !screensNextBtn || !screensCarouselIndicator) {
+function getScreenQualityLabel(profileId = "auto") {
+  if (profileId === "high") {
+    return t("screenQualityHigh");
+  }
+  if (profileId === "mid") {
+    return t("screenQualityMid");
+  }
+  if (profileId === "low") {
+    return t("screenQualityLow");
+  }
+  if (profileId === "safe") {
+    return t("screenQualitySafe");
+  }
+  return t("screenQualityAuto");
+}
+
+function getScreenStageQualityProfile(item) {
+  if (!item) {
+    return "auto";
+  }
+  if (item.isLocal) {
+    return localScreenQualityProfileId || "auto";
+  }
+  return "auto";
+}
+
+function selectActiveScreenItem(items) {
+  if (!Array.isArray(items) || items.length === 0) {
+    activeScreenUserId = null;
+    activeScreenSourceTrackId = null;
+    activeScreenStageItem = null;
+    return null;
+  }
+
+  const nonLocalItems = items.filter((item) => !item.isLocal);
+
+  if (pinnedScreenUserId) {
+    const pinned = items.find((item) => item.userId === pinnedScreenUserId) || null;
+    if (pinned) {
+      activeScreenUserId = pinned.userId;
+      activeScreenSourceTrackId = pinned.track?.id || null;
+      activeScreenStageItem = pinned;
+      return pinned;
+    }
+    pinnedScreenUserId = null;
+  }
+
+  if (activeScreenUserId) {
+    const current = items.find((item) => item.userId === activeScreenUserId) || null;
+    if (current) {
+      if (current.isLocal && localScreenLikelySelfCapture && nonLocalItems.length > 0) {
+        const saferRemote = nonLocalItems[0];
+        activeScreenUserId = saferRemote.userId;
+        activeScreenSourceTrackId = saferRemote.track?.id || null;
+        activeScreenStageItem = saferRemote;
+        return saferRemote;
+      }
+      activeScreenSourceTrackId = current.track?.id || null;
+      activeScreenStageItem = current;
+      return current;
+    }
+  }
+
+  if (localScreenLikelySelfCapture && nonLocalItems.length > 0) {
+    const saferRemote = nonLocalItems[0];
+    activeScreenUserId = saferRemote.userId;
+    activeScreenSourceTrackId = saferRemote.track?.id || null;
+    activeScreenStageItem = saferRemote;
+    return saferRemote;
+  }
+
+  const fallback = items[0];
+  activeScreenUserId = fallback.userId;
+  activeScreenSourceTrackId = fallback.track?.id || null;
+  activeScreenStageItem = fallback;
+  return fallback;
+}
+
+function bindScreenStageTrack(track) {
+  if (!screenStageVideoEl) {
     return;
   }
 
-  if (!enabled || total <= 1) {
-    screensCarouselNav.classList.add("hidden");
-    screensCarouselIndicator.textContent = "";
-    screensPrevBtn.disabled = true;
-    screensNextBtn.disabled = true;
+  const currentTrack = screenStageVideoEl.srcObject?.getVideoTracks?.()[0] || null;
+  const nextTrackId = track?.id || null;
+  if (currentTrack && nextTrackId && currentTrack.id === nextTrackId) {
     return;
   }
 
-  screensCarouselNav.classList.remove("hidden");
-  screensCarouselIndicator.textContent = `${mobileCarouselIndex + 1} / ${total}`;
-  screensPrevBtn.disabled = false;
-  screensNextBtn.disabled = false;
+  if (!track) {
+    screenStageVideoEl.srcObject = null;
+    return;
+  }
+
+  screenStageVideoEl.srcObject = new MediaStream([track]);
+  screenStageVideoEl.play().catch(() => {
+    // Playback can be delayed by browser gesture policies.
+  });
+}
+
+function renderScreenFilmstrip(items, activeItem) {
+  if (!screenFilmstripEl) {
+    return;
+  }
+
+  screenFilmstripEl.innerHTML = "";
+
+  for (const item of items) {
+    const card = document.createElement("button");
+    card.type = "button";
+    card.className = "screen-film-card";
+    card.setAttribute("role", "listitem");
+    card.setAttribute("aria-label", item.title);
+    if (activeItem && activeItem.userId === item.userId) {
+      card.classList.add("is-active");
+    }
+    if (pinnedScreenUserId && pinnedScreenUserId === item.userId) {
+      card.classList.add("is-pinned");
+    }
+
+    card.addEventListener("click", () => {
+      activeScreenUserId = item.userId;
+      activeScreenSourceTrackId = item.track?.id || null;
+      activeScreenStageItem = item;
+      renderScreens();
+    });
+
+    const preview = document.createElement("video");
+    preview.autoplay = true;
+    preview.playsInline = true;
+    preview.muted = true;
+    preview.srcObject = new MediaStream([item.track]);
+    preview.play().catch(() => {
+      // no-op
+    });
+
+    const label = document.createElement("div");
+    label.className = "screen-film-label";
+    label.textContent = item.title;
+
+    const badgeRow = document.createElement("div");
+    badgeRow.className = "screen-film-badges";
+
+    const liveBadge = document.createElement("span");
+    liveBadge.className = "screen-film-badge live";
+    liveBadge.textContent = t("liveBadge");
+    badgeRow.appendChild(liveBadge);
+
+    if (item.userId === pinnedScreenUserId) {
+      const pinBadge = document.createElement("span");
+      pinBadge.className = "screen-film-badge pin";
+      pinBadge.textContent = t("pin");
+      badgeRow.appendChild(pinBadge);
+    }
+
+    card.appendChild(preview);
+    card.appendChild(label);
+    card.appendChild(badgeRow);
+    screenFilmstripEl.appendChild(card);
+  }
+}
+
+function renderScreenStage(activeItem, totalStreams) {
+  const isLocalSoloPreview = Boolean(activeItem && activeItem.isLocal && totalStreams === 1);
+  if (screenHubEl) {
+    screenHubEl.classList.toggle("is-empty", !activeItem);
+    screenHubEl.classList.toggle("is-local-preview", isLocalSoloPreview);
+  }
+
+  if (screenStageLocalHintEl) {
+    const shouldShowLocalHint = Boolean(
+      activeItem &&
+      activeItem.isLocal &&
+      (isLocalSoloPreview || localScreenLikelySelfCapture)
+    );
+    screenStageLocalHintEl.classList.toggle("hidden", !shouldShowLocalHint);
+  }
+
+  if (screenHubMetaEl) {
+    screenHubMetaEl.textContent =
+      totalStreams > 0 ? t("screenHubStreamCount", { count: totalStreams }) : t("screenHubNoStreams");
+  }
+
+  if (!activeItem) {
+    if (screenStageWrapEl) {
+      screenStageWrapEl.classList.remove("is-live");
+    }
+    if (screenStageEmptyEl) {
+      screenStageEmptyEl.classList.remove("hidden");
+    }
+    if (screenStageOverlayEl) {
+      screenStageOverlayEl.classList.add("hidden");
+    }
+    if (screenStageAudioControlsEl) {
+      screenStageAudioControlsEl.classList.add("hidden");
+    }
+    bindScreenStageTrack(null);
+    if (screenStageTitleEl) {
+      screenStageTitleEl.textContent = "-";
+    }
+    if (screenStageQualityBadgeEl) {
+      screenStageQualityBadgeEl.textContent = getScreenQualityLabel("auto");
+    }
+    return;
+  }
+
+  bindScreenStageTrack(activeItem.track);
+
+  if (screenStageWrapEl) {
+    screenStageWrapEl.classList.add("is-live");
+  }
+  if (screenStageEmptyEl) {
+    screenStageEmptyEl.classList.add("hidden");
+  }
+  if (screenStageOverlayEl) {
+    screenStageOverlayEl.classList.remove("hidden");
+  }
+
+  if (screenStageTitleEl) {
+    screenStageTitleEl.textContent = activeItem.title;
+  }
+
+  const qualityProfile = getScreenStageQualityProfile(activeItem);
+  if (screenStageQualityBadgeEl) {
+    screenStageQualityBadgeEl.textContent = getScreenQualityLabel(qualityProfile);
+  }
+
+  if (screenStagePinBtn) {
+    const pinned = activeItem.userId === pinnedScreenUserId;
+    screenStagePinBtn.textContent = pinned ? t("unpin") : t("pin");
+    screenStagePinBtn.setAttribute("aria-label", pinned ? t("unpinScreenStream") : t("pinScreenStream"));
+  }
+
+  const canControlAudio = !activeItem.isLocal;
+  const hasScreenAudio = canControlAudio && hasScreenAudioTrack(activeItem.userId);
+  const isMuted = canControlAudio ? isScreenAudioMuted(activeItem.userId) : true;
+  if (screenStageMuteBtn) {
+    if (!canControlAudio) {
+      screenStageMuteBtn.classList.add("hidden");
+    } else {
+      screenStageMuteBtn.classList.remove("hidden");
+      screenStageMuteBtn.disabled = !hasScreenAudio;
+      screenStageMuteBtn.textContent = isMuted ? t("unmuteAudio") : t("muteAudio");
+      screenStageMuteBtn.setAttribute(
+        "aria-label",
+        isMuted ? t("unmuteThisScreenAudio") : t("muteThisScreenAudio")
+      );
+    }
+  }
+
+  if (screenStageAudioControlsEl && screenStageVolumeRangeEl && screenStageVolumeValueEl) {
+    if (!canControlAudio) {
+      screenStageAudioControlsEl.classList.add("hidden");
+    } else {
+      screenStageAudioControlsEl.classList.remove("hidden");
+      screenStageVolumeRangeEl.disabled = !hasScreenAudio;
+      screenStageVolumeRangeEl.value = String(Math.round(getScreenAudioVolume(activeItem.userId) * 100));
+      screenStageVolumeValueEl.textContent = hasScreenAudio
+        ? `${screenStageVolumeRangeEl.value}%`
+        : t("noAudio");
+    }
+  }
 }
 
 async function enterScreenFullscreen(element) {
@@ -7447,160 +8525,23 @@ async function enterScreenFullscreen(element) {
   }
 }
 
-function createScreenCard(item) {
-  const wrapper = document.createElement("article");
-  wrapper.className = "screen-card";
-  if (item.userId === pinnedScreenUserId) {
-    wrapper.classList.add("is-pinned");
-  }
-
-  const header = document.createElement("header");
-
-  const title = document.createElement("span");
-  title.className = "screen-card-title";
-  title.textContent = item.title;
-
-  const actions = document.createElement("div");
-  actions.className = "screen-card-actions";
-  let screenAudioControls = null;
-
-  const pinBtn = document.createElement("button");
-  pinBtn.type = "button";
-  pinBtn.className = "screen-action";
-  pinBtn.textContent = item.userId === pinnedScreenUserId ? t("unpin") : t("pin");
-  pinBtn.setAttribute(
-    "aria-label",
-    item.userId === pinnedScreenUserId ? t("unpinScreenStream") : t("pinScreenStream")
-  );
-  pinBtn.addEventListener("click", () => {
-    pinnedScreenUserId = pinnedScreenUserId === item.userId ? null : item.userId;
-    mobileCarouselIndex = 0;
-    renderScreens();
-  });
-
-  const fullscreenBtn = document.createElement("button");
-  fullscreenBtn.type = "button";
-  fullscreenBtn.className = "screen-action";
-  fullscreenBtn.textContent = t("fullscreen");
-  fullscreenBtn.setAttribute("aria-label", t("openFullscreen"));
-
-  const video = document.createElement("video");
-  video.autoplay = true;
-  video.playsInline = true;
-  video.muted = true;
-  video.srcObject = new MediaStream([item.track]);
-
-  fullscreenBtn.addEventListener("click", () => {
-    void enterScreenFullscreen(video);
-  });
-
-  actions.appendChild(pinBtn);
-  actions.appendChild(fullscreenBtn);
-
-  if (!item.isLocal) {
-    const hasScreenAudio = hasScreenAudioTrack(item.userId);
-    const muteBtnEl = document.createElement("button");
-    muteBtnEl.type = "button";
-    muteBtnEl.className = "screen-action";
-    const muted = isScreenAudioMuted(item.userId);
-    muteBtnEl.textContent = muted ? t("unmuteAudio") : t("muteAudio");
-    muteBtnEl.setAttribute(
-      "aria-label",
-      muted ? t("unmuteThisScreenAudio") : t("muteThisScreenAudio")
-    );
-    muteBtnEl.addEventListener("click", () => {
-      setScreenAudioMuted(item.userId, !muted);
-      renderScreens();
-    });
-    muteBtnEl.disabled = !hasScreenAudio;
-    actions.appendChild(muteBtnEl);
-
-    screenAudioControls = document.createElement("label");
-    screenAudioControls.className = "screen-audio-controls";
-
-    const volumeLabel = document.createElement("span");
-    volumeLabel.className = "screen-audio-label";
-    volumeLabel.textContent = t("musicVolume");
-
-    const volumeRange = document.createElement("input");
-    volumeRange.type = "range";
-    volumeRange.min = "0";
-    volumeRange.max = "200";
-    volumeRange.step = "1";
-    volumeRange.value = String(Math.round(getScreenAudioVolume(item.userId) * 100));
-    volumeRange.disabled = !hasScreenAudio;
-
-    const volumeValue = document.createElement("strong");
-    volumeValue.className = "screen-audio-value";
-    volumeValue.textContent = hasScreenAudio ? `${volumeRange.value}%` : t("noAudio");
-
-    volumeRange.addEventListener("input", () => {
-      volumeValue.textContent = `${volumeRange.value}%`;
-      setScreenAudioVolume(item.userId, Number(volumeRange.value) / 100);
-    });
-
-    screenAudioControls.appendChild(volumeLabel);
-    screenAudioControls.appendChild(volumeRange);
-    screenAudioControls.appendChild(volumeValue);
-  }
-
-  header.appendChild(title);
-  header.appendChild(actions);
-  wrapper.appendChild(header);
-  wrapper.appendChild(video);
-  if (screenAudioControls) {
-    wrapper.appendChild(screenAudioControls);
-  }
-
-  video.play().catch(() => {
-    // Browser may delay playback until user gesture.
-  });
-
-  return wrapper;
-}
-
 function renderScreens() {
   const items = getOrderedScreenItems();
-
-  if (pinnedScreenUserId && !items.some((item) => item.userId === pinnedScreenUserId)) {
-    pinnedScreenUserId = null;
+  if (screenHubEl) {
+    screenHubEl.classList.toggle("has-single-stream", items.length === 1);
   }
-
-  const useCarousel = isMobileScreensMode() && items.length > 1;
 
   if (items.length === 0) {
-    screensContainer.classList.remove("is-carousel");
-    screensContainer.innerHTML = "";
-    mobileCarouselIndex = 0;
-    updateScreensCarouselNav(false, 0);
+    if (screenFilmstripEl) {
+      screenFilmstripEl.innerHTML = "";
+    }
+    renderScreenStage(null, 0);
     return;
   }
 
-  if (!useCarousel) {
-    mobileCarouselIndex = 0;
-  }
-
-  mobileCarouselIndex = clamp(mobileCarouselIndex, 0, Math.max(0, items.length - 1));
-  const visibleItems = useCarousel ? [items[mobileCarouselIndex]] : items;
-
-  screensContainer.classList.toggle("is-carousel", useCarousel);
-  screensContainer.innerHTML = "";
-
-  for (const item of visibleItems) {
-    screensContainer.appendChild(createScreenCard(item));
-  }
-
-  updateScreensCarouselNav(useCarousel, items.length);
-}
-
-function stepMobileCarousel(step) {
-  const items = getOrderedScreenItems();
-  if (!isMobileScreensMode() || items.length <= 1) {
-    return;
-  }
-
-  mobileCarouselIndex = (mobileCarouselIndex + step + items.length) % items.length;
-  renderScreens();
+  const activeItem = selectActiveScreenItem(items);
+  renderScreenStage(activeItem, items.length);
+  renderScreenFilmstrip(items, activeItem);
 }
 
 function attachScreenTrack(userId, track) {
@@ -7895,6 +8836,9 @@ function removeSourceVoiceTrack(sourcePeerId, trackId = null) {
 }
 
 function setSourceScreenTrack(sourcePeerId, track) {
+  if (track && sourcePeerId === selfId) {
+    applyScreenTrackHints(track);
+  }
   const media = getOrCreateSourceMedia(sourcePeerId);
   media.screenTrack = track || null;
 
@@ -7979,12 +8923,14 @@ function syncForwardingForPeer(targetPeerId) {
 
   for (const [key, info] of desired.entries()) {
     const current = entry.forwardedSenders.get(key);
+    let activeSender = current?.sender || null;
 
     if (!current) {
       const transceiver = entry.pc.addTransceiver(info.track, {
         direction: "sendonly",
       });
       const sender = transceiver.sender;
+       activeSender = sender;
       if (info.track.kind === "audio") {
         applyPreferredAudioCodecsToTransceiver(transceiver, true);
         void optimizeAudioSender(sender);
@@ -8000,6 +8946,18 @@ function syncForwardingForPeer(targetPeerId) {
       current.sender.replaceTrack(info.track).catch(() => {
         // no-op
       });
+      activeSender = current.sender;
+    }
+
+    const abrKey = `host-forward:${targetPeerId}:${key}`;
+    if (info.mediaType === "screen" && info.track.kind === "video" && activeSender) {
+      registerScreenSenderAbr(abrKey, activeSender, {
+        sourcePeerId: info.sourcePeerId,
+        targetPeerId,
+        isLocalPublisher: info.sourcePeerId === selfId,
+      });
+    } else {
+      unregisterScreenSenderAbr(abrKey);
     }
 
     socket.emit("signal", {
@@ -8026,6 +8984,7 @@ function syncForwardingForPeer(targetPeerId) {
     }
 
     entry.forwardedSenders.delete(key);
+    unregisterScreenSenderAbr(`host-forward:${targetPeerId}:${key}`);
     changed = true;
 
     socket.emit("signal", {
@@ -8171,6 +9130,8 @@ function closePeer(peerId, skipSourceCleanup = false) {
   }
 
   peers.delete(peerId);
+  unregisterScreenSenderAbrByPrefix(`host-forward:${peerId}:`);
+  unregisterScreenSenderAbrByPrefix(`member-upstream:${peerId}`);
 
   try {
     if (entry.disconnectTimer) {
@@ -8192,6 +9153,10 @@ function closePeer(peerId, skipSourceCleanup = false) {
   }
 
   if (!isHost && roomState && peerId === roomState.hostId) {
+    unregisterScreenSenderAbrByPrefix("member-upstream:");
+    localScreenPublishPending = Boolean(localScreenTrack);
+    localScreenLastPublishHostId = null;
+    localScreenLastPublishedAudioTrackId = null;
     clearAllRemoteMedia();
     clearForwardTrackMaps();
   }
@@ -8401,18 +9366,20 @@ function updateMemberScreenSenders(entry) {
     applyPreferredAudioCodecsToTransceiver(screenAudioTransceiver, true);
   }
 
-  if (localScreenTrack && entry.screenSender) {
-    entry.screenSender.replaceTrack(localScreenTrack).catch(() => {
-      // no-op
+  const hostId = roomState?.hostId || null;
+  const abrKey = hostId ? `member-upstream:${hostId}` : null;
+  if (abrKey && entry.screenSender && localScreenTrack) {
+    registerScreenSenderAbr(abrKey, entry.screenSender, {
+      sourcePeerId: selfId,
+      targetPeerId: hostId,
+      isLocalPublisher: true,
     });
+  } else {
+    unregisterScreenSenderAbrByPrefix("member-upstream:");
   }
 
-  if (localScreenAudioTrack && entry.screenAudioSender) {
-    applyVoiceTrackHints(localScreenAudioTrack);
-    entry.screenAudioSender.replaceTrack(localScreenAudioTrack).catch(() => {
-      // no-op
-    });
-    void optimizeAudioSender(entry.screenAudioSender);
+  if (localScreenTrack) {
+    void publishLocalScreenToHost();
   }
 }
 
@@ -8625,8 +9592,115 @@ function handleRemoveForwardedTrack(payload) {
   }
 }
 
+async function publishLocalScreenToHost(options = {}) {
+  if (isHost || !localScreenTrack) {
+    localScreenPublishPending = false;
+    return {
+      ok: false,
+      waiting: false,
+      sentScreenAudioTrackId: null,
+      keptMicOnly: false,
+    };
+  }
+
+  const hostId = roomState?.hostId || null;
+  const entry = hostId ? peers.get(hostId) : null;
+  if (!hostId || !entry || !entry.screenSender) {
+    if (localScreenLastPublishHostId) {
+      unregisterScreenSenderAbr(`member-upstream:${localScreenLastPublishHostId}`);
+      localScreenLastPublishHostId = null;
+      localScreenLastPublishedAudioTrackId = null;
+    }
+    localScreenPublishPending = true;
+    if (options.reportPending) {
+      setStatus(t("screenPublishPending"));
+    }
+    return {
+      ok: false,
+      waiting: true,
+      sentScreenAudioTrackId: null,
+      keptMicOnly: false,
+    };
+  }
+
+  try {
+    const wasPending = localScreenPublishPending;
+    if (localScreenLastPublishHostId && localScreenLastPublishHostId !== hostId) {
+      unregisterScreenSenderAbr(`member-upstream:${localScreenLastPublishHostId}`);
+    }
+    applyScreenTrackHints(localScreenTrack);
+    await entry.screenSender.replaceTrack(localScreenTrack);
+    registerScreenSenderAbr(`member-upstream:${hostId}`, entry.screenSender, {
+      sourcePeerId: selfId,
+      targetPeerId: hostId,
+      isLocalPublisher: true,
+    });
+
+    const canSendScreenAudio =
+      Boolean(entry.screenAudioSender) &&
+      (!entry.micSender || entry.screenAudioSender !== entry.micSender);
+    const audioTrack = localScreenAudioTrack;
+
+    if (canSendScreenAudio && entry.screenAudioSender) {
+      if (audioTrack) {
+        applyVoiceTrackHints(audioTrack);
+      }
+      await entry.screenAudioSender.replaceTrack(audioTrack || null);
+      if (audioTrack) {
+        void optimizeAudioSender(entry.screenAudioSender);
+      }
+    }
+
+    const sentScreenAudioTrackId = canSendScreenAudio && audioTrack ? audioTrack.id : null;
+    socket.emit("signal", {
+      to: hostId,
+      payload: {
+        type: "member-screen-state",
+        enabled: true,
+        screenAudioTrackId: sentScreenAudioTrackId,
+      },
+    });
+
+    localScreenPublishPending = false;
+    localScreenLastPublishHostId = hostId;
+    localScreenLastPublishedAudioTrackId = sentScreenAudioTrackId;
+
+    if (wasPending && options.reportReady !== false) {
+      if (!audioTrack) {
+        setStatus(t("screenSharingStartedNoAudio"));
+      } else if (audioTrack && !sentScreenAudioTrackId) {
+        setStatus(t("screenSharingStartedMicKept"));
+      } else {
+        setStatus(t("screenSharingStartedWithAudio"));
+      }
+    }
+
+    return {
+      ok: true,
+      waiting: false,
+      sentScreenAudioTrackId,
+      keptMicOnly: Boolean(audioTrack && !sentScreenAudioTrackId),
+    };
+  } catch {
+    localScreenPublishPending = true;
+    if (options.reportPending) {
+      setStatus(t("screenPublishPending"));
+    }
+    return {
+      ok: false,
+      waiting: true,
+      sentScreenAudioTrackId: null,
+      keptMicOnly: false,
+    };
+  }
+}
+
 async function startScreenShare() {
   if (!joined) {
+    return;
+  }
+
+  if (screenPickerOpen) {
     return;
   }
 
@@ -8640,10 +9714,35 @@ async function startScreenShare() {
     return;
   }
 
+  let electronCapturePrepared = false;
+  let requestScreenAudio = true;
   try {
+    if (canUseElectronScreenPicker()) {
+      setStatus(t("screenPickerOpening"));
+      const picked = await pickDisplaySourceForElectron();
+      if (!picked) {
+        const currentStatus = String(statusEl?.textContent || "").trim();
+        if (!currentStatus || currentStatus === t("screenPickerOpening")) {
+          setStatus(t("screenPickerCanceled"));
+        }
+        return;
+      }
+
+      requestScreenAudio = Boolean(picked.withAudio);
+      setStatus(t("screenPreparingCapture"));
+      const prepared = await window.desktopApp.prepareDisplayCapture({
+        sourceId: picked.sourceId,
+        withAudio: requestScreenAudio,
+      });
+      if (!prepared?.ok) {
+        throw new Error(prepared?.reason || "Unable to prepare selected source");
+      }
+      electronCapturePrepared = true;
+    }
+
     const stream = await navigator.mediaDevices.getDisplayMedia({
       video: true,
-      audio: true,
+      audio: requestScreenAudio,
     });
 
     const videoTrack = stream.getVideoTracks()[0];
@@ -8654,9 +9753,24 @@ async function startScreenShare() {
       throw new Error("No video track from display");
     }
 
+    const likelySelfCapture = isLikelySelfScreenCaptureTrack(videoTrack);
+    if (likelySelfCapture) {
+      for (const item of stream.getTracks()) {
+        item.stop();
+      }
+      const selfCaptureError = new Error("Self capture source blocked");
+      selfCaptureError.name = "SelfCaptureBlocked";
+      throw selfCaptureError;
+    }
+
+    applyScreenTrackHints(videoTrack);
     localScreenStream = stream;
     localScreenTrack = videoTrack;
     localScreenAudioTrack = audioTrack;
+    localScreenPublishPending = false;
+    localScreenLastPublishHostId = null;
+    localScreenLastPublishedAudioTrackId = null;
+    localScreenLikelySelfCapture = likelySelfCapture;
     attachLocalScreenPreview(videoTrack);
 
     videoTrack.onended = () => {
@@ -8674,46 +9788,18 @@ async function startScreenShare() {
         setSourceScreenAudioTrackId(selfId, null);
       }
     } else {
-      const hostId = roomState?.hostId;
-      const entry = hostId ? peers.get(hostId) : null;
-
-      if (!entry || !entry.screenSender) {
-        throw new Error("Screen sender is not ready yet. Rejoin server and try again.");
-      }
-
-      await entry.screenSender.replaceTrack(videoTrack);
-      const canSendScreenAudio =
-        Boolean(entry.screenAudioSender) &&
-        (!entry.micSender || entry.screenAudioSender !== entry.micSender);
-
-      if (canSendScreenAudio && entry.screenAudioSender) {
-        if (audioTrack) {
-          applyVoiceTrackHints(audioTrack);
-        }
-        await entry.screenAudioSender.replaceTrack(audioTrack || null);
-        if (audioTrack) {
-          void optimizeAudioSender(entry.screenAudioSender);
-        }
-      }
-
-      const sentScreenAudioTrackId = canSendScreenAudio && audioTrack ? audioTrack.id : null;
-
-      socket.emit("signal", {
-        to: hostId,
-        payload: {
-          type: "member-screen-state",
-          enabled: true,
-          screenAudioTrackId: sentScreenAudioTrackId,
-        },
+      localScreenPublishPending = true;
+      const publishResult = await publishLocalScreenToHost({
+        reportPending: true,
+        reportReady: false,
       });
-
-      if (audioTrack && !sentScreenAudioTrackId) {
-        startedVideoOnlyToKeepMic = true;
-      }
+      startedVideoOnlyToKeepMic = Boolean(publishResult.keptMicOnly);
     }
 
     updateScreenButton();
-    if (!audioTrack) {
+    if (localScreenPublishPending) {
+      setStatus(t("screenPublishPending"));
+    } else if (!audioTrack) {
       setStatus(t("screenSharingStartedNoAudio"));
     } else if (startedVideoOnlyToKeepMic) {
       setStatus(t("screenSharingStartedMicKept"));
@@ -8721,7 +9807,14 @@ async function startScreenShare() {
       setStatus(t("screenSharingStartedWithAudio"));
     }
   } catch (error) {
-    setStatus(t("screenShareError", { details: error?.message || error?.name || "UnknownError" }));
+    const errorName = String(error?.name || "");
+    if (errorName === "SelfCaptureBlocked") {
+      setStatus(t("screenSelfCaptureBlocked"));
+    } else if (errorName === "NotAllowedError" || errorName === "AbortError") {
+      setStatus(t("screenPickerCanceled"));
+    } else {
+      setStatus(t("screenShareError", { details: error?.message || error?.name || "UnknownError" }));
+    }
 
     if (localScreenTrack) {
       localScreenTrack.stop();
@@ -8736,8 +9829,21 @@ async function startScreenShare() {
     localScreenTrack = null;
     localScreenAudioTrack = null;
     localScreenStream = null;
+    localScreenPublishPending = false;
+    localScreenLastPublishHostId = null;
+    localScreenLastPublishedAudioTrackId = null;
+    localScreenLikelySelfCapture = false;
+    unregisterScreenSenderAbrByPrefix("member-upstream:");
     removeLocalScreenPreview();
     updateScreenButton();
+  } finally {
+    if (electronCapturePrepared && window.desktopApp?.clearPreparedDisplayCapture) {
+      try {
+        await window.desktopApp.clearPreparedDisplayCapture();
+      } catch {
+        // no-op
+      }
+    }
   }
 }
 
@@ -8747,6 +9853,7 @@ async function stopScreenShare(fromEnded = false) {
   const activeStream = localScreenStream;
 
   if (!activeVideoTrack && !activeAudioTrack && !activeStream) {
+    localScreenLikelySelfCapture = false;
     updateScreenButton();
     return;
   }
@@ -8754,6 +9861,8 @@ async function stopScreenShare(fromEnded = false) {
   localScreenTrack = null;
   localScreenAudioTrack = null;
   localScreenStream = null;
+  localScreenPublishPending = false;
+  localScreenLikelySelfCapture = false;
   removeLocalScreenPreview();
 
   if (activeVideoTrack) {
@@ -8795,7 +9904,8 @@ async function stopScreenShare(fromEnded = false) {
     const canSendScreenAudio =
       Boolean(entry && entry.screenAudioSender) &&
       (!entry?.micSender || entry.screenAudioSender !== entry.micSender);
-    const removedScreenAudioTrackId = canSendScreenAudio ? activeAudioTrack?.id || null : null;
+    const removedScreenAudioTrackId =
+      localScreenLastPublishedAudioTrackId || (canSendScreenAudio ? activeAudioTrack?.id || null : null);
 
     if (entry && entry.screenSender) {
       await entry.screenSender.replaceTrack(null).catch(() => {
@@ -8819,9 +9929,15 @@ async function stopScreenShare(fromEnded = false) {
         },
       });
     }
+
+    unregisterScreenSenderAbrByPrefix("member-upstream:");
   }
 
+  localScreenLastPublishHostId = null;
+  localScreenLastPublishedAudioTrackId = null;
+  localScreenQualityProfileId = "high";
   updateScreenButton();
+  renderScreens();
   setStatus(t("screenSharingStopped"));
 }
 
@@ -8831,6 +9947,7 @@ async function becomeHost() {
   }
 
   if (isHost) {
+    unregisterScreenSenderAbrByPrefix("member-upstream:");
     const outboundMicTrack = getOutboundMicTrack();
     if (outboundMicTrack) {
       addSourceVoiceTrack(selfId, outboundMicTrack);
@@ -8858,6 +9975,10 @@ async function becomeHost() {
 
   clearAllRemoteMedia();
   clearForwardTrackMaps();
+  unregisterScreenSenderAbrByPrefix("member-upstream:");
+  localScreenPublishPending = false;
+  localScreenLastPublishHostId = null;
+  localScreenLastPublishedAudioTrackId = null;
 
   isHost = true;
 
@@ -8893,6 +10014,7 @@ async function becomeHost() {
 function becomeMember(nextHostId) {
   sourceMedia.clear();
   screenAudioTrackIdsBySource.clear();
+  unregisterScreenSenderAbrByPrefix("host-forward:");
 
   for (const peerId of Array.from(peers.keys())) {
     closePeer(peerId, true);
@@ -8902,6 +10024,10 @@ function becomeMember(nextHostId) {
   clearForwardTrackMaps();
 
   isHost = false;
+  localScreenPublishPending = Boolean(localScreenTrack);
+  localScreenLastPublishHostId = null;
+  localScreenLastPublishedAudioTrackId = null;
+  unregisterScreenSenderAbrByPrefix("member-upstream:");
 
   if (nextHostId) {
     setStatus(t("waitingForHost"));
@@ -8913,6 +10039,11 @@ function becomeMember(nextHostId) {
 function becomeServerOnly() {
   sourceMedia.clear();
   screenAudioTrackIdsBySource.clear();
+  unregisterScreenSenderAbrByPrefix("host-forward:");
+  unregisterScreenSenderAbrByPrefix("member-upstream:");
+  localScreenPublishPending = false;
+  localScreenLastPublishHostId = null;
+  localScreenLastPublishedAudioTrackId = null;
 
   for (const peerId of Array.from(peers.keys())) {
     closePeer(peerId, true);
@@ -8927,6 +10058,7 @@ function becomeServerOnly() {
 
 function resetSessionState() {
   clearMicMuteTimer();
+  closeScreenPickerDialogWithResult(null);
 
   for (const peerId of Array.from(peers.keys())) {
     closePeer(peerId, true);
@@ -8935,6 +10067,8 @@ function resetSessionState() {
   sourceMedia.clear();
   screenAudioTrackIdsBySource.clear();
   screenAudioVolumes.clear();
+  stopScreenAbrLoop();
+  screenSenderAbrStateByKey.clear();
   clearSpeakingDetectionState();
   clearForwardTrackMaps();
   clearAllRemoteMedia();
@@ -8980,9 +10114,16 @@ function resetSessionState() {
   localScreenAudioTrack = null;
   localScreenStream = null;
   localScreenPreview = null;
+  localScreenPublishPending = false;
+  localScreenLastPublishHostId = null;
+  localScreenLastPublishedAudioTrackId = null;
+  localScreenQualityProfileId = "high";
+  localScreenQualityUpdatedAt = 0;
+  localScreenLikelySelfCapture = false;
   pinnedScreenUserId = null;
-  mobileCarouselIndex = 0;
-  screenSwipeStartX = null;
+  activeScreenUserId = null;
+  activeScreenSourceTrackId = null;
+  activeScreenStageItem = null;
   mutedScreenUserIds.clear();
   screenStartedAtByUserId.clear();
 
@@ -8997,9 +10138,9 @@ function resetSessionState() {
   controls.classList.add("hidden");
   joinForm.classList.remove("hidden");
   participantsList.innerHTML = "";
-  screensContainer.innerHTML = "";
-  screensContainer.classList.remove("is-carousel");
-  updateScreensCarouselNav(false, 0);
+  if (screenFilmstripEl) {
+    screenFilmstripEl.innerHTML = "";
+  }
   replaceChatMessages([]);
   chatSubmitInProgress = false;
   clearPendingChatAttachments();
@@ -9651,68 +10792,61 @@ if (leaveVoiceBtn) {
   });
 }
 
-if (screensPrevBtn) {
-  screensPrevBtn.addEventListener("click", () => {
-    stepMobileCarousel(-1);
+if (screenHubToggleBtn) {
+  screenHubToggleBtn.addEventListener("click", () => {
+    setScreenHubCollapsed(!isScreenHubCollapsed);
   });
 }
 
-if (screensNextBtn) {
-  screensNextBtn.addEventListener("click", () => {
-    stepMobileCarousel(1);
+if (screenStagePinBtn) {
+  screenStagePinBtn.addEventListener("click", () => {
+    if (!activeScreenStageItem) {
+      return;
+    }
+    pinnedScreenUserId =
+      pinnedScreenUserId === activeScreenStageItem.userId ? null : activeScreenStageItem.userId;
+    renderScreens();
   });
 }
 
-const handleScreensViewportChange = () => {
-  mobileCarouselIndex = 0;
-  renderScreens();
-};
-
-if (typeof mobileScreensQuery.addEventListener === "function") {
-  mobileScreensQuery.addEventListener("change", handleScreensViewportChange);
-} else if (typeof mobileScreensQuery.addListener === "function") {
-  mobileScreensQuery.addListener(handleScreensViewportChange);
+if (screenStageFullscreenBtn) {
+  screenStageFullscreenBtn.addEventListener("click", () => {
+    void enterScreenFullscreen(screenStageVideoEl);
+  });
 }
 
-screensContainer.addEventListener(
-  "touchstart",
-  (event) => {
-    if (!isMobileScreensMode() || getOrderedScreenItems().length <= 1) {
-      screenSwipeStartX = null;
+if (screenStageMuteBtn) {
+  screenStageMuteBtn.addEventListener("click", () => {
+    if (!activeScreenStageItem || activeScreenStageItem.isLocal) {
       return;
     }
+    const muted = isScreenAudioMuted(activeScreenStageItem.userId);
+    setScreenAudioMuted(activeScreenStageItem.userId, !muted);
+    renderScreens();
+  });
+}
 
-    const point = event.changedTouches?.[0];
-    screenSwipeStartX = point ? point.clientX : null;
-  },
-  { passive: true }
-);
-
-screensContainer.addEventListener(
-  "touchend",
-  (event) => {
-    if (screenSwipeStartX === null) {
+if (screenStageVolumeRangeEl) {
+  screenStageVolumeRangeEl.addEventListener("input", () => {
+    if (!activeScreenStageItem || activeScreenStageItem.isLocal) {
       return;
     }
+    setScreenAudioVolume(activeScreenStageItem.userId, Number(screenStageVolumeRangeEl.value) / 100);
+    if (screenStageVolumeValueEl) {
+      screenStageVolumeValueEl.textContent = `${screenStageVolumeRangeEl.value}%`;
+    }
+  });
+}
 
-    const point = event.changedTouches?.[0];
-    const endX = point ? point.clientX : null;
-    if (endX === null) {
-      screenSwipeStartX = null;
+if (screenStageEmptyTriggerBtn) {
+  screenStageEmptyTriggerBtn.addEventListener("click", async () => {
+    if (localScreenTrack) {
+      await stopScreenShare(false);
       return;
     }
-
-    const delta = endX - screenSwipeStartX;
-    screenSwipeStartX = null;
-
-    if (Math.abs(delta) < 40) {
-      return;
-    }
-
-    stepMobileCarousel(delta < 0 ? 1 : -1);
-  },
-  { passive: true }
-);
+    await startScreenShare();
+  });
+}
 
 leaveBtn.addEventListener("click", async () => {
   if (localScreenTrack) {
@@ -10116,6 +11250,7 @@ applyTheme(preferredThemeId, { persist: false });
 applyLanguage(preferredLanguageId, { persist: false, rerender: false });
 applyMotionProfile(preferredMotionProfileId, { persist: false });
 applyBackgroundAnimation(preferredBackgroundAnimationId, { persist: false });
+configureSelfCaptureHandle();
 void initializeMaterialIcons();
 if (nameInput) {
   nameInput.value = loadStoredProfileName();
@@ -10129,6 +11264,12 @@ void refreshProfileDeviceSelectors();
 void initializeNetworkModeSetting();
 void initializeWindowChrome();
 void initializeDesktopNotifications();
+syncMobileViewportHeightVar();
+window.addEventListener("resize", syncMobileViewportHeightVar, { passive: true });
+window.addEventListener("orientationchange", syncMobileViewportHeightVar, { passive: true });
+if (window.visualViewport) {
+  window.visualViewport.addEventListener("resize", syncMobileViewportHeightVar, { passive: true });
+}
 
 if (hasOpusCodec && hasRedCodec) {
   console.info("Audio codec preference active: Opus + RED");
@@ -10140,6 +11281,7 @@ if (hasOpusCodec && hasRedCodec) {
 console.info(`Experimental command available: ${DLOLMUS_COMMAND_PREFIX} on|off`);
 console.info(`RNNoise command available: ${RN_COMMAND_PREFIX} on|off`);
 
+setScreenHubCollapsed(isScreenHubCollapsed, { persist: false });
 updateMuteButtonLabel();
 updateScreenButton();
 renderScreens();

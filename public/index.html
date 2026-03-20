@@ -172,6 +172,67 @@
           </div>
         </section>
 
+        <section id="screen-hub" class="screen-hub" aria-label="Screen stage">
+          <header class="screen-hub-header">
+            <h2 id="screen-hub-title">Screen Stage</h2>
+            <div class="screen-hub-header-tools">
+              <div id="screen-hub-meta" class="screen-hub-meta">No active streams</div>
+              <button
+                id="screen-hub-toggle-btn"
+                type="button"
+                class="screen-hub-toggle-btn"
+                aria-label="Toggle screen stage visibility"
+                aria-expanded="true"
+              >
+                Hide Stage
+              </button>
+            </div>
+          </header>
+          <div id="screen-stage-wrap" class="screen-stage-wrap">
+            <video id="screen-stage-video" autoplay playsinline muted></video>
+            <div id="screen-stage-empty" class="screen-stage-empty">
+              <span id="screen-stage-empty-text">No one is sharing screen right now.</span>
+              <button
+                id="screen-stage-empty-trigger-btn"
+                type="button"
+                class="screen-stage-empty-trigger-btn"
+                aria-label="Start screen share"
+              >
+                Start Screen Share
+              </button>
+            </div>
+            <div id="screen-stage-local-hint" class="screen-stage-local-hint hidden">
+              Local preview. To avoid mirror effect, share another window/screen.
+            </div>
+            <div id="screen-stage-overlay" class="screen-stage-overlay hidden">
+              <div class="screen-stage-badges">
+                <span id="screen-stage-live-badge" class="screen-stage-live-badge">LIVE</span>
+                <span id="screen-stage-quality-badge" class="screen-stage-quality-badge">AUTO</span>
+              </div>
+              <div class="screen-stage-title-line">
+                <strong id="screen-stage-title">-</strong>
+              </div>
+              <div class="screen-stage-actions">
+                <button id="screen-stage-pin-btn" type="button" class="screen-stage-action" aria-label="Pin screen stream">
+                  Pin
+                </button>
+                <button id="screen-stage-fullscreen-btn" type="button" class="screen-stage-action" aria-label="Open stream in fullscreen">
+                  Fullscreen
+                </button>
+                <button id="screen-stage-mute-btn" type="button" class="screen-stage-action" aria-label="Mute this screen stream audio">
+                  Mute Audio
+                </button>
+              </div>
+            </div>
+          </div>
+          <label id="screen-stage-audio-controls" class="screen-stage-audio-controls hidden">
+            <span id="screen-stage-volume-label">Music Volume</span>
+            <input id="screen-stage-volume-range" type="range" min="0" max="200" step="1" value="100" />
+            <strong id="screen-stage-volume-value">100%</strong>
+          </label>
+          <div id="screen-filmstrip" class="screen-filmstrip" role="list"></div>
+        </section>
+
         <div class="workspace-grid">
           <section class="chat-column">
             <div id="chat-messages" class="chat-messages"></div>
@@ -198,16 +259,6 @@
             <section class="panel">
               <h2 id="participants-title">Participants</h2>
               <ul id="participants" class="participants"></ul>
-            </section>
-
-            <section class="panel">
-              <h2 id="screen-streams-title">Screen Streams</h2>
-              <div id="screens" class="screens-grid"></div>
-              <div id="screens-carousel-nav" class="screens-carousel-nav hidden">
-                <button id="screens-prev-btn" type="button" aria-label="Previous screen stream">Prev</button>
-                <span id="screens-carousel-indicator" aria-live="polite"></span>
-                <button id="screens-next-btn" type="button" aria-label="Next screen stream">Next</button>
-              </div>
             </section>
           </aside>
         </div>

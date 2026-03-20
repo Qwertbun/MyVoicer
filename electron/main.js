@@ -48,6 +48,7 @@ let shutdownInProgress = false;
 let startServer = null;
 let stopServer = null;
 let pendingNotificationActivationPayload = null;
+let preparedDisplayCapture = null;
 const SESSION_PERMISSIONS_KEY = "__syntoPermissionsConfigured";
 
 function ensureDirectorySafe(dirPath) {
@@ -394,7 +395,7 @@ function createMainWindow() {
     height: APP_WINDOW_HEIGHT,
     minWidth: APP_WINDOW_MIN_WIDTH,
     minHeight: APP_WINDOW_MIN_HEIGHT,
-    frame: true,
+    frame: false,
     show: false,
     backgroundColor: "#090b10",
     webPreferences: {
@@ -420,6 +421,59 @@ function createMainWindow() {
   mainWindow.on("closed", () => {
     mainWindow = null;
   });
+}
+
+function serializeDisplaySource(source) {
+  const thumbnailDataUrl =
+    source && source.thumbnail && typeof source.thumbnail.toDataURL === "function"
+      ? source.thumbnail.toDataURL()
+      : "";
+
+  return {
+    id: String(source?.id || ""),
+    name: String(source?.name || "Display source"),
+    type: String(source?.id || "").startsWith("window:") ? "window" : "screen",
+    displayId: String(source?.display_id || ""),
+    thumbnailDataUrl,
+  };
+}
+
+async function listDisplaySources() {
+  const sources = await desktopCapturer.getSources({
+    types: ["screen", "window"],
+    fetchWindowIcons: false,
+    thumbnailSize: { width: 420, height: 236 },
+  });
+
+  return sources
+    .map(serializeDisplaySource)
+    .filter((item) => item.id);
+}
+
+async function prepareDisplayCapture(payload = {}) {
+  const sourceId = String(payload?.sourceId || "").trim();
+  if (!sourceId) {
+    return { ok: false, reason: "source-required" };
+  }
+
+  const withAudio = payload?.withAudio !== false;
+  const sources = await desktopCapturer.getSources({
+    types: ["screen", "window"],
+    fetchWindowIcons: false,
+    thumbnailSize: { width: 1, height: 1 },
+  });
+  const known = sources.some((item) => String(item.id) === sourceId);
+  if (!known) {
+    return { ok: false, reason: "source-not-found" };
+  }
+
+  preparedDisplayCapture = {
+    sourceId,
+    withAudio,
+    preparedAt: Date.now(),
+  };
+
+  return { ok: true };
 }
 
 function configureMainWindowPermissions(targetWindow) {
@@ -464,12 +518,21 @@ function configureMainWindowPermissions(targetWindow) {
     session.setDisplayMediaRequestHandler(
       async (request, callback) => {
         try {
+          const prepared = preparedDisplayCapture;
+          preparedDisplayCapture = null;
+
+          if (!prepared || !prepared.sourceId) {
+            callback({});
+            return;
+          }
+
           const sources = await desktopCapturer.getSources({
             types: ["screen", "window"],
             fetchWindowIcons: false,
-            thumbnailSize: { width: 0, height: 0 },
+            thumbnailSize: { width: 1, height: 1 },
           });
-          const selectedSource = sources.find((source) => String(source.id).startsWith("screen:")) || sources[0];
+          const selectedSource =
+            sources.find((source) => String(source.id) === String(prepared.sourceId)) || null;
           if (!selectedSource) {
             callback({});
             return;
@@ -477,7 +540,7 @@ function configureMainWindowPermissions(targetWindow) {
 
           callback({
             video: selectedSource,
-            audio: request.audioRequested ? "loopback" : undefined,
+            audio: request.audioRequested && prepared.withAudio ? "loopback" : undefined,
           });
         } catch (error) {
           console.warn(
@@ -487,7 +550,7 @@ function configureMainWindowPermissions(targetWindow) {
         }
       },
       {
-        useSystemPicker: true,
+        useSystemPicker: false,
       }
     );
   }
@@ -693,6 +756,28 @@ function getWindowForEvent(event) {
 }
 
 ipcMain.handle("app:get-network-mode", () => getEmbeddedNetworkModeState());
+ipcMain.handle("screen:list-display-sources", async () => {
+  try {
+    return await listDisplaySources();
+  } catch (error) {
+    console.warn(`[desktop-capture] list sources failed: ${error && error.message ? error.message : String(error)}`);
+    return [];
+  }
+});
+ipcMain.handle("screen:prepare-display-capture", async (_event, payload) => {
+  try {
+    return await prepareDisplayCapture(payload);
+  } catch (error) {
+    return {
+      ok: false,
+      reason: error && error.message ? error.message : "prepare-failed",
+    };
+  }
+});
+ipcMain.handle("screen:clear-prepared-display-capture", () => {
+  preparedDisplayCapture = null;
+  return { ok: true };
+});
 ipcMain.handle("app:set-network-mode", async (_event, nextMode) => {
   const currentState = getEmbeddedNetworkModeState();
   if (currentState.remoteBackendConfigured) {
