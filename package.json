@@ -4,6 +4,7 @@
   "description": "Voice messenger desktop/web app with room host as first entrant",
   "main": "electron/main.js",
   "scripts": {
+    "icons:build": "node scripts/generate-icons.js",
     "start": "node scripts/run-electron.js",
     "start:electron": "node scripts/run-electron.js",
     "start:web": "node scripts/run-web-server.js server",
@@ -37,6 +38,8 @@
   "devDependencies": {
     "electron": "^41.0.3",
     "electron-builder": "^26.8.2",
+    "png-to-ico": "^2.1.8",
+    "sharp": "^0.34.5",
     "socket.io-client": "^4.8.3"
   },
   "repository": {
@@ -55,6 +58,7 @@
       "electron/**/*",
       "p2p/**/*",
       "public/**/*",
+      "ico/**/*",
       "server.js",
       "scripts/**/*",
       "data/**/*",
@@ -69,6 +73,7 @@
       }
     ],
     "win": {
+      "icon": "ico/app.ico",
       "target": [
         {
           "target": "nsis",

@@ -40,6 +40,8 @@ const APP_WINDOW_WIDTH = 1540;
 const APP_WINDOW_HEIGHT = 940;
 const APP_WINDOW_MIN_WIDTH = 1100;
 const APP_WINDOW_MIN_HEIGHT = 700;
+const APP_ICON_ICO_PATH = path.join(__dirname, "..", "ico", "app.ico");
+const APP_ICON_PNG_FALLBACK_PATH = path.join(__dirname, "..", "ico", "icons.png");
 
 let splashWindow = null;
 let mainWindow = null;
@@ -50,6 +52,16 @@ let stopServer = null;
 let pendingNotificationActivationPayload = null;
 let preparedDisplayCapture = null;
 const SESSION_PERMISSIONS_KEY = "__syntoPermissionsConfigured";
+
+function resolveWindowIconPath() {
+  if (fs.existsSync(APP_ICON_ICO_PATH)) {
+    return APP_ICON_ICO_PATH;
+  }
+  if (fs.existsSync(APP_ICON_PNG_FALLBACK_PATH)) {
+    return APP_ICON_PNG_FALLBACK_PATH;
+  }
+  return undefined;
+}
 
 function ensureDirectorySafe(dirPath) {
   fs.mkdirSync(dirPath, { recursive: true });
@@ -364,6 +376,7 @@ async function checkUpdatesFromRepository() {
 }
 
 function createSplashWindow() {
+  const windowIconPath = resolveWindowIconPath();
   splashWindow = new BrowserWindow({
     width: APP_WINDOW_WIDTH,
     height: APP_WINDOW_HEIGHT,
@@ -373,6 +386,7 @@ function createSplashWindow() {
     minimizable: false,
     show: true,
     backgroundColor: "#000000",
+    ...(windowIconPath ? { icon: windowIconPath } : {}),
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
@@ -390,6 +404,7 @@ function createSplashWindow() {
 }
 
 function createMainWindow() {
+  const windowIconPath = resolveWindowIconPath();
   mainWindow = new BrowserWindow({
     width: APP_WINDOW_WIDTH,
     height: APP_WINDOW_HEIGHT,
@@ -398,6 +413,7 @@ function createMainWindow() {
     frame: false,
     show: false,
     backgroundColor: "#090b10",
+    ...(windowIconPath ? { icon: windowIconPath } : {}),
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
