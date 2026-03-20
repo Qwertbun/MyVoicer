@@ -69,6 +69,58 @@
   --screen-audio-value: #f3f4f6;
   --screen-audio-accent: #1f8bff;
   --screen-video-bg: #000000;
+  --screen-hub-bg-start: color-mix(in srgb, var(--bg-content) 88%, var(--accent) 12%);
+  --screen-hub-bg-end: color-mix(in srgb, var(--bg-content) 84%, var(--tag-screen-bg) 16%);
+  --screen-hub-collapsed-bg-start: color-mix(in srgb, var(--bg-content) 94%, transparent);
+  --screen-hub-collapsed-bg-end: color-mix(in srgb, var(--bg-panel) 96%, var(--tag-screen-bg) 4%);
+  --screen-hub-title: color-mix(in srgb, var(--tag-screen-bg) 56%, var(--text) 44%);
+  --screen-hub-toggle-border: color-mix(in srgb, var(--line) 68%, var(--tag-screen-bg) 32%);
+  --screen-hub-toggle-bg: color-mix(in srgb, var(--surface-soft) 92%, transparent);
+  --screen-hub-toggle-bg-hover: color-mix(in srgb, var(--surface-soft) 80%, var(--tag-screen-bg) 20%);
+  --screen-hub-toggle-text: color-mix(in srgb, var(--text) 78%, var(--tag-screen-bg) 22%);
+  --screen-stage-border: color-mix(in srgb, var(--line) 76%, var(--tag-screen-bg) 24%);
+  --screen-stage-bg-a: color-mix(in srgb, var(--tag-screen-bg) 20%, transparent);
+  --screen-stage-bg-b: color-mix(in srgb, var(--accent) 20%, transparent);
+  --screen-stage-bg-base: color-mix(in srgb, var(--screen-video-bg) 90%, var(--bg-input) 10%);
+  --screen-stage-grid-a: color-mix(in srgb, var(--tag-screen-bg) 18%, transparent);
+  --screen-stage-grid-h: color-mix(in srgb, var(--tag-screen-bg) 10%, transparent);
+  --screen-stage-grid-v: color-mix(in srgb, var(--tag-screen-bg) 8%, transparent);
+  --screen-stage-empty-border: color-mix(in srgb, var(--tag-screen-bg) 52%, transparent);
+  --screen-stage-empty-bg-top: color-mix(in srgb, var(--bg-input) 90%, transparent);
+  --screen-stage-empty-bg-bottom: color-mix(in srgb, var(--bg-panel) 82%, transparent);
+  --screen-stage-empty-text: color-mix(in srgb, var(--text-muted) 76%, var(--text) 24%);
+  --screen-stage-empty-inner-stroke: color-mix(in srgb, var(--tag-screen-bg) 24%, transparent);
+  --screen-stage-empty-trigger-border: color-mix(in srgb, var(--tag-screen-bg) 54%, transparent);
+  --screen-stage-empty-trigger-bg-top: color-mix(in srgb, var(--bg-elevated) 84%, var(--tag-screen-bg) 16%);
+  --screen-stage-empty-trigger-bg-bottom: color-mix(in srgb, var(--bg-panel) 84%, var(--accent) 16%);
+  --screen-stage-empty-trigger-text: color-mix(in srgb, var(--text) 86%, var(--tag-screen-bg) 14%);
+  --screen-stage-local-hint-border: color-mix(in srgb, var(--tag-screen-bg) 56%, transparent);
+  --screen-stage-local-hint-bg: color-mix(in srgb, var(--bg-input) 74%, transparent);
+  --screen-stage-local-hint-text: color-mix(in srgb, var(--text) 82%, var(--tag-screen-bg) 18%);
+  --screen-stage-live-badge-bg: color-mix(in srgb, var(--danger) 34%, transparent);
+  --screen-stage-live-badge-border: color-mix(in srgb, var(--danger) 56%, white 8%);
+  --screen-stage-live-badge-text: color-mix(in srgb, #ffffff 92%, var(--text) 8%);
+  --screen-stage-quality-badge-bg: color-mix(in srgb, var(--tag-screen-bg) 26%, transparent);
+  --screen-stage-quality-badge-border: color-mix(in srgb, var(--tag-screen-bg) 54%, transparent);
+  --screen-stage-quality-badge-text: color-mix(in srgb, var(--text) 82%, var(--tag-screen-bg) 18%);
+  --screen-stage-title: color-mix(in srgb, var(--text) 88%, #ffffff 12%);
+  --screen-stage-action-border-theme: color-mix(in srgb, var(--screen-action-border) 72%, var(--tag-screen-bg) 28%);
+  --screen-stage-action-bg-theme: color-mix(in srgb, var(--screen-action-bg) 82%, var(--surface-soft) 18%);
+  --screen-stage-action-bg-hover-theme: color-mix(in srgb, var(--screen-action-hover-bg) 78%, var(--tag-screen-bg) 22%);
+  --screen-stage-action-text: color-mix(in srgb, var(--text) 86%, var(--tag-screen-bg) 14%);
+  --screen-stage-audio-border: color-mix(in srgb, var(--line) 72%, var(--tag-screen-bg) 28%);
+  --screen-stage-audio-bg: color-mix(in srgb, var(--screen-audio-row-bg) 90%, var(--surface-soft) 10%);
+  --screen-stage-audio-text: color-mix(in srgb, var(--screen-audio-label) 88%, var(--text) 12%);
+  --screen-stage-audio-value-text: color-mix(in srgb, var(--screen-audio-value) 90%, var(--text) 10%);
+  --screen-film-card-bg: color-mix(in srgb, var(--screen-card-bg) 92%, transparent);
+  --screen-film-active-border: color-mix(in srgb, var(--tag-screen-bg) 68%, transparent);
+  --screen-film-active-glow: color-mix(in srgb, var(--tag-screen-bg) 28%, transparent);
+  --screen-film-pinned-border: color-mix(in srgb, var(--green) 64%, transparent);
+  --screen-film-label: color-mix(in srgb, var(--screen-card-text) 92%, var(--text) 8%);
+  --screen-film-live-bg: color-mix(in srgb, var(--danger) 30%, transparent);
+  --screen-film-live-text: color-mix(in srgb, #ffffff 92%, var(--text) 8%);
+  --screen-film-pin-bg: color-mix(in srgb, var(--green) 26%, transparent);
+  --screen-film-pin-text: color-mix(in srgb, var(--text) 88%, var(--green) 12%);
   --pin-outline: 0 0 0 2px rgba(35, 165, 90, 0.35);
   --profile-shadow: 0 12px 28px rgba(0, 0, 0, 0.35);
   --focus-ring: #23a55a;
@@ -161,9 +213,9 @@
   place-items: center;
   padding: 20px;
   background:
-    radial-gradient(circle at 18% 18%, rgba(76, 188, 255, 0.18), transparent 50%),
-    radial-gradient(circle at 82% 82%, rgba(110, 92, 255, 0.2), transparent 54%),
-    rgba(2, 6, 14, 0.82);
+    radial-gradient(circle at 18% 18%, color-mix(in srgb, var(--tag-screen-bg) 34%, transparent), transparent 50%),
+    radial-gradient(circle at 82% 82%, color-mix(in srgb, var(--accent) 34%, transparent), transparent 54%),
+    color-mix(in srgb, var(--bg-input) 82%, transparent);
   backdrop-filter: blur(12px) saturate(1.2);
 }
 
@@ -176,13 +228,13 @@
   gap: 12px;
   padding: 18px;
   border-radius: 18px;
-  border: 1px solid color-mix(in srgb, var(--line) 72%, #7cc6ff 28%);
+  border: 1px solid color-mix(in srgb, var(--line) 72%, var(--tag-screen-bg) 28%);
   background:
     linear-gradient(
       160deg,
-      color-mix(in srgb, var(--bg-panel) 94%, #02111d 6%) 0%,
-      color-mix(in srgb, var(--bg-elevated) 90%, #031a2b 10%) 68%,
-      color-mix(in srgb, #031828 88%, var(--bg-content) 12%) 100%
+      color-mix(in srgb, var(--bg-panel) 94%, var(--accent) 6%) 0%,
+      color-mix(in srgb, var(--bg-elevated) 90%, var(--tag-screen-bg) 10%) 68%,
+      color-mix(in srgb, var(--bg-content) 86%, var(--tag-screen-bg) 14%) 100%
     );
   box-shadow:
     0 24px 58px rgba(0, 0, 0, 0.55),
@@ -250,8 +302,8 @@
 }
 
 .screen-picker-source.is-selected {
-  border-color: color-mix(in srgb, #6ad8ff 72%, transparent);
-  box-shadow: 0 0 0 2px rgba(83, 197, 255, 0.32);
+  border-color: color-mix(in srgb, var(--tag-screen-bg) 72%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--tag-screen-bg) 32%, transparent);
 }
 
 .screen-picker-thumb {
@@ -259,7 +311,9 @@
   aspect-ratio: 16 / 9;
   object-fit: cover;
   display: block;
-  background: radial-gradient(circle at 50% 40%, rgba(87, 222, 255, 0.22), #05070a 66%);
+  background:
+    radial-gradient(circle at 50% 40%, color-mix(in srgb, var(--tag-screen-bg) 36%, transparent), transparent 58%),
+    color-mix(in srgb, var(--screen-video-bg) 90%, var(--bg-input) 10%);
 }
 
 .screen-picker-name {
@@ -308,8 +362,8 @@
 }
 
 .screen-picker-btn.confirm {
-  border-color: color-mix(in srgb, #61d4ff 72%, transparent);
-  background: color-mix(in srgb, #1f7dbe 46%, transparent);
+  border-color: color-mix(in srgb, var(--tag-screen-bg) 72%, transparent);
+  background: color-mix(in srgb, var(--tag-screen-bg) 44%, var(--surface-soft) 56%);
 }
 
 :root[data-motion-profile="off"] {
@@ -1390,12 +1444,12 @@ select:focus {
   background:
     linear-gradient(
       180deg,
-      color-mix(in srgb, #0b1220 86%, transparent) 0%,
-      color-mix(in srgb, var(--bg-panel) 88%, #111827 12%) 100%
+      color-mix(in srgb, var(--topbar-bg) 94%, var(--accent) 6%) 0%,
+      color-mix(in srgb, var(--bg-panel) 90%, var(--topbar-bg) 10%) 100%
     );
   box-shadow:
-    inset 0 1px 0 color-mix(in srgb, #95aed8 22%, transparent),
-    0 8px 20px color-mix(in srgb, #000 22%, transparent);
+    inset 0 1px 0 color-mix(in srgb, var(--text) 14%, transparent),
+    0 8px 20px color-mix(in srgb, var(--shadow-color) 22%, transparent);
   align-items: center;
   grid-template-columns: auto minmax(0, 1fr) auto;
   gap: 12px;
@@ -1438,9 +1492,9 @@ body.is-electron-runtime .window-chrome {
   width: 24px;
   height: 24px;
   border-radius: 7px;
-  border: 1px solid color-mix(in srgb, var(--accent) 36%, #ffffff 12%);
-  background: color-mix(in srgb, var(--accent) 56%, #0f172a 44%);
-  color: #f8fbff;
+  border: 1px solid color-mix(in srgb, var(--accent) 36%, var(--text) 12%);
+  background: color-mix(in srgb, var(--accent) 56%, var(--bg-elevated) 44%);
+  color: color-mix(in srgb, var(--text) 96%, #ffffff 4%);
   font-size: 11px;
   font-weight: 750;
   letter-spacing: 0.06em;
@@ -1465,7 +1519,7 @@ body.is-electron-runtime .window-chrome {
 }
 
 .window-chrome-subtitle {
-  color: color-mix(in srgb, var(--text-muted) 88%, #91a4c5 12%);
+  color: color-mix(in srgb, var(--text-muted) 90%, var(--text) 10%);
   font-size: 10px;
   line-height: 1.1;
   overflow: hidden;
@@ -1480,7 +1534,7 @@ body.is-electron-runtime .window-chrome {
 
 .window-chrome-meta {
   display: block;
-  color: color-mix(in srgb, #d9e7ff 72%, #9cb0d4 28%);
+  color: color-mix(in srgb, var(--text-muted) 74%, var(--text) 26%);
   font-size: 11px;
   line-height: 1.2;
   text-overflow: ellipsis;
@@ -1504,9 +1558,9 @@ body.is-electron-runtime .window-chrome {
   min-width: 44px;
   padding: 4px 8px;
   border-radius: 999px;
-  border: 1px solid color-mix(in srgb, #87a7d8 28%, transparent);
-  background: color-mix(in srgb, #11203b 78%, transparent);
-  color: color-mix(in srgb, #deebff 90%, white 10%);
+  border: 1px solid color-mix(in srgb, var(--line) 72%, var(--accent) 28%);
+  background: color-mix(in srgb, var(--topbar-bg) 84%, var(--accent) 16%);
+  color: color-mix(in srgb, var(--text) 90%, white 10%);
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.08em;
@@ -1516,24 +1570,24 @@ body.is-electron-runtime .window-chrome {
 
 .window-chrome-chip.secure {
   border-color: color-mix(in srgb, var(--green) 44%, transparent);
-  background: color-mix(in srgb, var(--green) 18%, #0f1b16 82%);
-  color: color-mix(in srgb, #c6ffe4 88%, white 12%);
+  background: color-mix(in srgb, var(--green) 18%, var(--topbar-bg) 82%);
+  color: color-mix(in srgb, var(--text) 84%, var(--green) 16%);
 }
 
 .window-control-btn {
   min-width: 32px;
   height: 28px;
-  border: 1px solid color-mix(in srgb, var(--line) 62%, #5c739b 38%);
+  border: 1px solid color-mix(in srgb, var(--line) 72%, var(--accent) 28%);
   border-radius: 8px;
   padding: 0;
-  background: color-mix(in srgb, #142138 82%, transparent);
-  color: #e5eeff;
+  background: color-mix(in srgb, var(--topbar-bg) 84%, transparent);
+  color: color-mix(in srgb, var(--text) 90%, white 10%);
   font-size: 16px;
   font-weight: 700;
   line-height: 1;
   display: grid;
   place-items: center;
-  box-shadow: 0 4px 14px color-mix(in srgb, #000 24%, transparent);
+  box-shadow: 0 4px 14px color-mix(in srgb, var(--shadow-color) 24%, transparent);
 }
 
 .window-control-icon {
@@ -1550,7 +1604,7 @@ body.is-electron-runtime .window-chrome {
 }
 
 .window-control-btn:hover {
-  background: color-mix(in srgb, #1c3154 84%, transparent);
+  background: color-mix(in srgb, var(--topbar-bg) 76%, var(--accent) 24%);
   transform: translateY(calc(var(--hover-lift) * -1));
 }
 
@@ -1564,13 +1618,13 @@ body.is-electron-runtime .window-chrome {
 }
 
 .window-control-btn.danger {
-  border-color: color-mix(in srgb, var(--danger) 52%, #ffffff 8%);
-  background: color-mix(in srgb, var(--danger) 46%, #2e1113 54%);
-  color: #fff5f6;
+  border-color: color-mix(in srgb, var(--danger) 52%, var(--text) 8%);
+  background: color-mix(in srgb, var(--danger) 46%, var(--topbar-bg) 54%);
+  color: color-mix(in srgb, var(--text) 92%, #ffffff 8%);
 }
 
 .window-control-btn.danger:hover {
-  background: color-mix(in srgb, var(--danger-hover) 62%, #370d10 38%);
+  background: color-mix(in srgb, var(--danger-hover) 62%, var(--topbar-bg) 38%);
 }
 
 .discord-shell {
@@ -2313,7 +2367,7 @@ body.is-lobby-mode .topbar-meta {
 .workspace-hud {
   min-height: 36px;
   max-height: 36px;
-  border-bottom: 1px solid color-mix(in srgb, #2f3f58 74%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 78%, var(--accent) 22%);
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
@@ -2322,10 +2376,14 @@ body.is-lobby-mode .topbar-meta {
   position: relative;
   overflow: hidden;
   background:
-    linear-gradient(180deg, #0e1624 0%, #101a2b 100%);
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--topbar-bg) 94%, var(--accent) 6%) 0%,
+      color-mix(in srgb, var(--topbar-bg) 88%, var(--bg-panel) 12%) 100%
+    );
   box-shadow:
-    inset 0 1px 0 color-mix(in srgb, #88a3d2 18%, transparent),
-    0 8px 16px color-mix(in srgb, #000 26%, transparent);
+    inset 0 1px 0 color-mix(in srgb, var(--text) 12%, transparent),
+    0 8px 16px color-mix(in srgb, var(--shadow-color) 26%, transparent);
 }
 
 .workspace-hud::before,
@@ -2337,7 +2395,9 @@ body.is-lobby-mode .topbar-meta {
 
 .workspace-hud::before {
   inset: 0;
-  background: linear-gradient(90deg, color-mix(in srgb, #203857 54%, transparent), transparent 56%);
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--accent) 28%, transparent), transparent 56%),
+    radial-gradient(circle at 78% 22%, color-mix(in srgb, var(--tag-screen-bg) 20%, transparent), transparent 58%);
   opacity: 0.32;
 }
 
@@ -2346,7 +2406,7 @@ body.is-lobby-mode .topbar-meta {
   right: 0;
   top: 0;
   height: 1px;
-  background: color-mix(in srgb, #8ea6d3 34%, transparent);
+  background: color-mix(in srgb, var(--text) 22%, transparent);
   opacity: 0.4;
 }
 
@@ -2426,7 +2486,7 @@ body.is-lobby-mode .topbar-meta {
   width: auto;
   max-width: none;
   text-align: right;
-  color: color-mix(in srgb, #e0e9ff 70%, #94a3bf 30%);
+  color: color-mix(in srgb, var(--text-muted) 76%, var(--text) 24%);
   font-size: 12px;
   line-height: 1.2;
   padding: 0;
@@ -2461,10 +2521,30 @@ body.is-lobby-mode .topbar-meta {
   gap: 2px;
 }
 
+.chat-messages.is-empty-state {
+  align-content: center;
+  justify-items: center;
+}
+
 .chat-empty {
-  margin-top: 20px;
-  color: var(--text-muted);
+  margin: 0;
+  width: min(560px, 100%);
+  color: color-mix(in srgb, var(--text-muted) 84%, var(--text) 16%);
   font-size: 14px;
+  text-align: center;
+  line-height: 1.45;
+  border: 1px solid color-mix(in srgb, var(--line) 76%, transparent);
+  border-radius: 12px;
+  padding: 12px 16px;
+  background:
+    linear-gradient(
+      155deg,
+      color-mix(in srgb, var(--surface-soft) 90%, transparent) 0%,
+      color-mix(in srgb, var(--bg-panel) 92%, transparent) 100%
+    );
+  box-shadow:
+    0 14px 32px color-mix(in srgb, var(--shadow-color) 24%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
 }
 
 .chat-welcome {
@@ -3168,8 +3248,8 @@ ol.chat-welcome-list li::before {
   background:
     linear-gradient(
       155deg,
-      color-mix(in srgb, var(--bg-content) 88%, #020d1c 12%) 0%,
-      color-mix(in srgb, var(--bg-content) 84%, #04172b 16%) 100%
+      var(--screen-hub-bg-start) 0%,
+      var(--screen-hub-bg-end) 100%
     );
 }
 
@@ -3177,18 +3257,48 @@ ol.chat-welcome-list li::before {
   display: none;
 }
 
+.screen-hub.is-empty .screen-stage-wrap {
+  height: clamp(130px, 20vh, 220px);
+}
+
 .screen-hub.has-single-stream .screen-filmstrip {
   display: none;
 }
 
 .screen-hub.is-collapsed {
-  padding-bottom: 10px;
+  padding: 6px 10px;
+  gap: 0;
+  background:
+    linear-gradient(
+      145deg,
+      var(--screen-hub-collapsed-bg-start) 0%,
+      var(--screen-hub-collapsed-bg-end) 100%
+    );
 }
 
 .screen-hub.is-collapsed .screen-stage-wrap,
 .screen-hub.is-collapsed .screen-stage-audio-controls,
 .screen-hub.is-collapsed .screen-filmstrip {
   display: none;
+}
+
+.screen-hub.is-collapsed .screen-hub-header {
+  align-items: center;
+  min-height: 26px;
+}
+
+.screen-hub.is-collapsed .screen-hub-header h2 {
+  font-size: 12px;
+  letter-spacing: 0.04em;
+}
+
+.screen-hub.is-collapsed .screen-hub-meta {
+  font-size: 11px;
+}
+
+.screen-hub.is-collapsed .screen-hub-toggle-btn {
+  padding: 3px 8px;
+  font-size: 9px;
 }
 
 .screen-hub-header {
@@ -3203,7 +3313,7 @@ ol.chat-welcome-list li::before {
   font-size: 14px;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: color-mix(in srgb, #8fe3ff 66%, var(--text) 34%);
+  color: var(--screen-hub-title);
 }
 
 .screen-hub-meta {
@@ -3218,9 +3328,9 @@ ol.chat-welcome-list li::before {
 }
 
 .screen-hub-toggle-btn {
-  border: 1px solid color-mix(in srgb, var(--line) 68%, #53cfff 32%);
-  background: color-mix(in srgb, rgba(8, 24, 38, 0.9) 92%, transparent);
-  color: #d7f2ff;
+  border: 1px solid var(--screen-hub-toggle-border);
+  background: var(--screen-hub-toggle-bg);
+  color: var(--screen-hub-toggle-text);
   border-radius: 8px;
   padding: 4px 9px;
   font-size: 10px;
@@ -3230,7 +3340,7 @@ ol.chat-welcome-list li::before {
 }
 
 .screen-hub-toggle-btn:hover {
-  background: color-mix(in srgb, rgba(14, 36, 56, 0.94) 92%, transparent);
+  background: var(--screen-hub-toggle-bg-hover);
 }
 
 .screen-stage-wrap {
@@ -3240,11 +3350,11 @@ ol.chat-welcome-list li::before {
   height: clamp(220px, 34vh, 420px);
   overflow: hidden;
   border-radius: 14px;
-  border: 1px solid color-mix(in srgb, var(--line) 76%, #3cc9ff 24%);
+  border: 1px solid var(--screen-stage-border);
   background:
-    radial-gradient(circle at 15% 15%, rgba(58, 197, 255, 0.2), transparent 56%),
-    radial-gradient(circle at 80% 85%, rgba(117, 83, 255, 0.2), transparent 58%),
-    #05070b;
+    radial-gradient(circle at 15% 15%, var(--screen-stage-bg-a), transparent 56%),
+    radial-gradient(circle at 80% 85%, var(--screen-stage-bg-b), transparent 58%),
+    var(--screen-stage-bg-base);
   box-shadow:
     0 18px 36px rgba(0, 0, 0, 0.38),
     inset 0 0 0 1px rgba(255, 255, 255, 0.04);
@@ -3259,9 +3369,9 @@ ol.chat-welcome-list li::before {
   z-index: 1;
   opacity: 0.42;
   background:
-    radial-gradient(circle at 50% 112%, rgba(74, 219, 255, 0.18), transparent 62%),
-    linear-gradient(to bottom, rgba(98, 223, 255, 0.08) 1px, transparent 1px) center / 100% 30px,
-    linear-gradient(to right, rgba(98, 223, 255, 0.06) 1px, transparent 1px) center / 30px 100%;
+    radial-gradient(circle at 50% 112%, var(--screen-stage-grid-a), transparent 62%),
+    linear-gradient(to bottom, var(--screen-stage-grid-h) 1px, transparent 1px) center / 100% 30px,
+    linear-gradient(to right, var(--screen-stage-grid-v) 1px, transparent 1px) center / 30px 100%;
   transition: opacity var(--motion-medium) var(--motion-ease);
 }
 
@@ -3305,15 +3415,15 @@ ol.chat-welcome-list li::before {
   max-width: min(520px, calc(100% - 28px));
   padding: 14px 18px;
   border-radius: 12px;
-  border: 1px solid rgba(82, 208, 255, 0.32);
+  border: 1px solid var(--screen-stage-empty-border);
   background:
-    linear-gradient(180deg, rgba(5, 16, 28, 0.78), rgba(5, 16, 28, 0.55));
+    linear-gradient(180deg, var(--screen-stage-empty-bg-top), var(--screen-stage-empty-bg-bottom));
   backdrop-filter: blur(6px);
   box-shadow:
     0 14px 26px rgba(0, 0, 0, 0.35),
-    inset 0 0 0 1px rgba(180, 233, 255, 0.08);
+    inset 0 0 0 1px var(--screen-stage-empty-inner-stroke);
   text-align: center;
-  color: color-mix(in srgb, var(--text-muted) 70%, #d7ecff 30%);
+  color: var(--screen-stage-empty-text);
   font-size: 12px;
   text-transform: uppercase;
   letter-spacing: 0.02em;
@@ -3324,10 +3434,10 @@ ol.chat-welcome-list li::before {
   opacity: 0;
   transform: translateY(6px);
   pointer-events: none;
-  border: 1px solid color-mix(in srgb, #76ddff 54%, transparent);
+  border: 1px solid var(--screen-stage-empty-trigger-border);
   background:
-    linear-gradient(180deg, rgba(10, 40, 68, 0.88), rgba(7, 32, 56, 0.84));
-  color: #d8f5ff;
+    linear-gradient(180deg, var(--screen-stage-empty-trigger-bg-top), var(--screen-stage-empty-trigger-bg-bottom));
+  color: var(--screen-stage-empty-trigger-text);
   border-radius: 9px;
   padding: 6px 11px;
   font-size: 10px;
@@ -3365,9 +3475,9 @@ ol.chat-welcome-list li::before {
   max-width: min(420px, calc(100% - 20px));
   padding: 7px 10px;
   border-radius: 8px;
-  border: 1px solid rgba(82, 208, 255, 0.34);
-  background: rgba(7, 22, 36, 0.74);
-  color: #d4f0ff;
+  border: 1px solid var(--screen-stage-local-hint-border);
+  background: var(--screen-stage-local-hint-bg);
+  color: var(--screen-stage-local-hint-text);
   font-size: 10px;
   line-height: 1.35;
   letter-spacing: 0.04em;
@@ -3386,9 +3496,9 @@ ol.chat-welcome-list li::before {
   background:
     linear-gradient(
       180deg,
-      rgba(3, 6, 10, 0) 0%,
-      rgba(3, 6, 10, 0.72) 42%,
-      rgba(3, 6, 10, 0.88) 100%
+      transparent 0%,
+      color-mix(in srgb, var(--screen-video-bg) 72%, transparent) 42%,
+      color-mix(in srgb, var(--screen-video-bg) 88%, transparent) 100%
     );
 }
 
@@ -3411,15 +3521,15 @@ ol.chat-welcome-list li::before {
 }
 
 .screen-stage-live-badge {
-  background: color-mix(in srgb, #ff3d61 34%, transparent);
-  border-color: rgba(255, 103, 132, 0.56);
-  color: #ffe5ea;
+  background: var(--screen-stage-live-badge-bg);
+  border-color: var(--screen-stage-live-badge-border);
+  color: var(--screen-stage-live-badge-text);
 }
 
 .screen-stage-quality-badge {
-  background: color-mix(in srgb, #45d9ff 26%, transparent);
-  border-color: rgba(89, 223, 255, 0.5);
-  color: #dbf9ff;
+  background: var(--screen-stage-quality-badge-bg);
+  border-color: var(--screen-stage-quality-badge-border);
+  color: var(--screen-stage-quality-badge-text);
 }
 
 .screen-stage-title-line {
@@ -3429,7 +3539,7 @@ ol.chat-welcome-list li::before {
 .screen-stage-title-line strong {
   display: block;
   font-size: 13px;
-  color: #f2f7ff;
+  color: var(--screen-stage-title);
   text-shadow: 0 1px 0 rgba(0, 0, 0, 0.42);
   min-width: 0;
   overflow: hidden;
@@ -3444,9 +3554,9 @@ ol.chat-welcome-list li::before {
 }
 
 .screen-stage-action {
-  border: 1px solid color-mix(in srgb, #93e9ff 26%, rgba(255, 255, 255, 0.22));
-  background: color-mix(in srgb, rgba(10, 24, 36, 0.92) 88%, transparent);
-  color: #e7f9ff;
+  border: 1px solid var(--screen-stage-action-border-theme);
+  background: var(--screen-stage-action-bg-theme);
+  color: var(--screen-stage-action-text);
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.03em;
@@ -3455,7 +3565,7 @@ ol.chat-welcome-list li::before {
 }
 
 .screen-stage-action:hover {
-  background: color-mix(in srgb, rgba(18, 40, 60, 0.98) 88%, transparent);
+  background: var(--screen-stage-action-bg-hover-theme);
 }
 
 .screen-stage-action.hidden {
@@ -3472,13 +3582,13 @@ ol.chat-welcome-list li::before {
   align-items: center;
   gap: 10px;
   border-radius: 10px;
-  border: 1px solid color-mix(in srgb, var(--line) 72%, #43ccff 28%);
+  border: 1px solid var(--screen-stage-audio-border);
   padding: 8px 10px;
-  background: color-mix(in srgb, rgba(6, 20, 34, 0.86) 92%, transparent);
+  background: var(--screen-stage-audio-bg);
 }
 
 .screen-stage-audio-controls span {
-  color: #c8e8f7;
+  color: var(--screen-stage-audio-text);
   font-size: 12px;
 }
 
@@ -3488,7 +3598,7 @@ ol.chat-welcome-list li::before {
 }
 
 .screen-stage-audio-controls strong {
-  color: #f4fbff;
+  color: var(--screen-stage-audio-value-text);
   font-size: 12px;
   min-width: 54px;
   text-align: right;
@@ -3507,7 +3617,7 @@ ol.chat-welcome-list li::before {
 .screen-film-card {
   border: 1px solid color-mix(in srgb, var(--line) 74%, transparent);
   border-radius: 10px;
-  background: color-mix(in srgb, rgba(6, 16, 28, 0.95) 92%, transparent);
+  background: var(--screen-film-card-bg);
   display: grid;
   gap: 4px;
   padding: 0 0 6px;
@@ -3527,19 +3637,19 @@ ol.chat-welcome-list li::before {
 }
 
 .screen-film-card.is-active {
-  border-color: color-mix(in srgb, #62dcff 68%, transparent);
-  box-shadow: 0 0 0 2px rgba(98, 220, 255, 0.28);
+  border-color: var(--screen-film-active-border);
+  box-shadow: 0 0 0 2px var(--screen-film-active-glow);
 }
 
 .screen-film-card.is-pinned {
-  border-color: color-mix(in srgb, #52ffa6 64%, transparent);
+  border-color: var(--screen-film-pinned-border);
 }
 
 .screen-film-label {
   padding: 0 8px;
   font-size: 11px;
   font-weight: 600;
-  color: #f1f7ff;
+  color: var(--screen-film-label);
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3561,13 +3671,13 @@ ol.chat-welcome-list li::before {
 }
 
 .screen-film-badge.live {
-  background: color-mix(in srgb, #ff4f6d 30%, transparent);
-  color: #ffe8ee;
+  background: var(--screen-film-live-bg);
+  color: var(--screen-film-live-text);
 }
 
 .screen-film-badge.pin {
-  background: color-mix(in srgb, #42f5af 26%, transparent);
-  color: #defeee;
+  background: var(--screen-film-pin-bg);
+  color: var(--screen-film-pin-text);
 }
 
 #remote-audios {
@@ -3992,8 +4102,8 @@ ol.chat-welcome-list li::before {
     z-index: 26;
     border: 1px solid color-mix(in srgb, var(--line) 76%, transparent);
     border-radius: 12px;
-    box-shadow: 0 10px 24px color-mix(in srgb, #000 28%, transparent);
-    background: color-mix(in srgb, var(--chat-form-bg) 96%, #0b1220 4%);
+    box-shadow: 0 10px 24px color-mix(in srgb, var(--shadow-color) 28%, transparent);
+    background: color-mix(in srgb, var(--chat-form-bg) 96%, var(--accent) 4%);
     padding:
       8px
       max(10px, env(safe-area-inset-right))
@@ -4061,7 +4171,7 @@ ol.chat-welcome-list li::before {
     min-height: 0;
     height: 100%;
     border-bottom: 0;
-    background: color-mix(in srgb, var(--bg-content) 96%, #0a111b 4%);
+    background: color-mix(in srgb, var(--bg-content) 97%, var(--bg-main) 3%);
   }
 
   .chat-messages {
@@ -4069,7 +4179,7 @@ ol.chat-welcome-list li::before {
     overflow-y: auto;
     padding: 10px max(10px, env(safe-area-inset-right)) 10px max(10px, env(safe-area-inset-left));
     -webkit-overflow-scrolling: touch;
-    background: color-mix(in srgb, var(--bg-content) 97%, #0a111b 3%);
+    background: color-mix(in srgb, var(--bg-content) 98%, var(--bg-main) 2%);
   }
 
   .chat-empty {
@@ -4152,6 +4262,10 @@ ol.chat-welcome-list li::before {
   .screen-hub-toggle-btn {
     min-height: 32px;
     padding: 0 10px;
+  }
+
+  .screen-hub.is-collapsed .screen-hub-meta {
+    display: none;
   }
 
   .screen-stage-wrap {

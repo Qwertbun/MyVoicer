@@ -5991,13 +5991,16 @@ function renderChat() {
   }
 
   chatMessagesEl.innerHTML = "";
+  chatMessagesEl.classList.remove("is-empty-state", "is-welcome-state");
 
   if (!joined) {
+    chatMessagesEl.classList.add("is-welcome-state");
     chatMessagesEl.appendChild(createChatWelcomeElement());
     return;
   }
 
   if (chatMessages.length === 0) {
+    chatMessagesEl.classList.add("is-empty-state");
     const empty = document.createElement("p");
     empty.className = "chat-empty";
     empty.textContent = t("chatEmptyNoMessages");
