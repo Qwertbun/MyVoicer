@@ -7435,6 +7435,16 @@ function formatVolumePercentLabel(percentValue) {
   return `${percent}%`;
 }
 
+function shouldMuteRemoteMicForScreenEchoGuard() {
+  return Boolean(localScreenTrack && localScreenAudioTrack);
+}
+
+function applyAllRemoteUserVolumes() {
+  for (const userId of remoteVoice.keys()) {
+    applyUserVolume(userId);
+  }
+}
+
 function hasScreenAudioTrack(userId) {
   const entry = remoteVoice.get(userId);
   if (!entry) {
@@ -7857,6 +7867,7 @@ function applyUserVolume(userId) {
   const targetVolume = getUserVolume(userId);
   const targetScreenAudioVolume = getScreenAudioVolume(userId);
   const screenMuted = isScreenAudioMuted(userId);
+  const remoteMicMutedByEchoGuard = shouldMuteRemoteMicForScreenEchoGuard();
 
   if (entry.gainNode && entry.tracks.size > 0) {
     entry.gainNode.gain.value = targetVolume;
@@ -7869,7 +7880,7 @@ function applyUserVolume(userId) {
 
         const nextGate = item.isScreenAudio
           ? (screenMuted ? 0 : targetScreenAudioVolume)
-          : 1;
+          : (remoteMicMutedByEchoGuard ? 0 : 1);
         if (item.justAttached) {
           const now = entry.gainNode.context.currentTime;
           item.trackGainNode.gain.cancelScheduledValues(now);
@@ -7885,7 +7896,9 @@ function applyUserVolume(userId) {
   }
 
   for (const item of entry.tracks.values()) {
-    const gate = item.isScreenAudio ? (screenMuted ? 0 : targetScreenAudioVolume) : 1;
+    const gate = item.isScreenAudio
+      ? (screenMuted ? 0 : targetScreenAudioVolume)
+      : (remoteMicMutedByEchoGuard ? 0 : 1);
     item.audio.volume = clamp(targetVolume * gate, 0, 1);
   }
 }
@@ -9884,6 +9897,7 @@ async function startScreenShare() {
     localScreenLastPublishHostId = null;
     localScreenLastPublishedAudioTrackId = null;
     localScreenLikelySelfCapture = likelySelfCapture;
+    applyAllRemoteUserVolumes();
     attachLocalScreenPreview(videoTrack);
 
     videoTrack.onended = () => {
@@ -9947,6 +9961,7 @@ async function startScreenShare() {
     localScreenLastPublishedAudioTrackId = null;
     localScreenLikelySelfCapture = false;
     unregisterScreenSenderAbrByPrefix("member-upstream:");
+    applyAllRemoteUserVolumes();
     removeLocalScreenPreview();
     updateScreenButton();
   } finally {
@@ -9976,6 +9991,7 @@ async function stopScreenShare(fromEnded = false) {
   localScreenStream = null;
   localScreenPublishPending = false;
   localScreenLikelySelfCapture = false;
+  applyAllRemoteUserVolumes();
   removeLocalScreenPreview();
 
   if (activeVideoTrack) {
