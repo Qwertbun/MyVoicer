@@ -10,10 +10,8 @@ const rooms = new Map();
 const MAX_CHAT_MESSAGES = 150;
 const MAX_CHAT_MESSAGE_LENGTH = 1200;
 const MAX_CHAT_ATTACHMENTS = 4;
-const MAX_CHAT_ATTACHMENT_BYTES = 8 * 1024 * 1024;
-const MAX_CHAT_TOTAL_ATTACHMENT_BYTES = 20 * 1024 * 1024;
 const CHAT_EDIT_WINDOW_MS = 365 * 24 * 60 * 60 * 1000;
-const SOCKET_MAX_HTTP_BUFFER_SIZE = 40 * 1024 * 1024;
+const SOCKET_MAX_HTTP_BUFFER_SIZE = 1024 * 1024 * 1024;
 const PUBLIC_ROOT = path.join(__dirname, "public");
 const CHAT_UPLOADS_ROOT = process.env.CHAT_UPLOADS_ROOT
   ? path.resolve(String(process.env.CHAT_UPLOADS_ROOT))
@@ -973,7 +971,6 @@ async function normalizeChatAttachments(attachments, roomId) {
 
   const normalized = [];
   const createdPaths = [];
-  let totalBytes = 0;
 
   try {
     for (let index = 0; index < limited.length; index += 1) {
@@ -989,23 +986,10 @@ async function normalizeChatAttachments(attachments, roomId) {
 
       const mimeType = normalizeChatAttachmentMimeType(item.mimeType || parsed.mimeType);
       const fileName = normalizeChatAttachmentFileName(item.name);
-      const estimatedBytes = Math.floor((parsed.base64Payload.length * 3) / 4);
-      if (estimatedBytes > MAX_CHAT_ATTACHMENT_BYTES) {
-        throw new Error("Attachment is too large.");
-      }
 
       const buffer = Buffer.from(parsed.base64Payload, "base64");
       if (!buffer.length) {
         continue;
-      }
-
-      if (buffer.length > MAX_CHAT_ATTACHMENT_BYTES) {
-        throw new Error("Attachment is too large.");
-      }
-
-      totalBytes += buffer.length;
-      if (totalBytes > MAX_CHAT_TOTAL_ATTACHMENT_BYTES) {
-        throw new Error("Total attachment size is too large.");
       }
 
       const extension = getChatAttachmentExtension(fileName, mimeType);
@@ -1777,15 +1761,6 @@ io.on("connection", (socket) => {
         }
         return true;
       });
-
-      const approximateBytes =
-        estimatePayloadBytes(sanitizedEnvelope) + estimatePayloadBytes(alignedAttachmentPayloads);
-      if (approximateBytes > RELAY_MAX_HISTORY_BYTES) {
-        socket.emit("chat-error", {
-          message: "Encrypted payload too large.",
-        });
-        return;
-      }
 
       io.to(roomId).emit("chat-message", {
         roomId,

@@ -149,8 +149,6 @@ const DLOLMUS_COMMAND_PREFIX = "/dlolmus";
 const RN_COMMAND_PREFIX = "/rn";
 const MAX_CHAT_ATTACHMENTS = 4;
 const MAX_CHAT_MESSAGE_LENGTH = 1200;
-const MAX_CHAT_ATTACHMENT_BYTES = 8 * 1024 * 1024;
-const MAX_CHAT_TOTAL_ATTACHMENT_BYTES = 20 * 1024 * 1024;
 const CHAT_EDIT_WINDOW_MS = 365 * 24 * 60 * 60 * 1000;
 const MAIN_PAGE_LABEL = "main";
 const MIC_SENSITIVITY_STORAGE_KEY = "voice_mic_sensitivity_v1";
@@ -5390,10 +5388,6 @@ function readFileAsDataUrl(file) {
   });
 }
 
-function getPendingChatAttachmentBytes() {
-  return pendingChatAttachments.reduce((acc, item) => acc + item.size, 0);
-}
-
 function renderPendingChatAttachments() {
   if (!chatAttachmentsPreviewEl) {
     return;
@@ -5497,7 +5491,6 @@ function appendPendingChatAttachments(files) {
     return;
   }
 
-  let totalBytes = getPendingChatAttachmentBytes();
   let warnedByCount = false;
 
   for (const file of list) {
@@ -5513,25 +5506,6 @@ function appendPendingChatAttachments(files) {
     const name = String(file.name || "").trim().slice(0, 120) || "file";
     const size = Number(file.size);
     if (!Number.isFinite(size) || size <= 0) {
-      continue;
-    }
-
-    if (size > MAX_CHAT_ATTACHMENT_BYTES) {
-      setStatus(
-        t("attachmentTooLarge", {
-          name,
-          max: formatFileSize(MAX_CHAT_ATTACHMENT_BYTES),
-        })
-      );
-      continue;
-    }
-
-    if (totalBytes + size > MAX_CHAT_TOTAL_ATTACHMENT_BYTES) {
-      setStatus(
-        t("attachmentTotalTooLarge", {
-          max: formatFileSize(MAX_CHAT_TOTAL_ATTACHMENT_BYTES),
-        })
-      );
       continue;
     }
 
@@ -5556,7 +5530,6 @@ function appendPendingChatAttachments(files) {
       objectUrl,
     });
     pendingChatAttachmentSeq += 1;
-    totalBytes += size;
   }
 
   if (warnedByCount) {
@@ -5605,18 +5578,8 @@ async function buildOutgoingChatAttachmentPayloads() {
   }
 
   const payload = [];
-  let totalBytes = 0;
 
   for (const attachment of pendingChatAttachments) {
-    totalBytes += attachment.size;
-    if (totalBytes > MAX_CHAT_TOTAL_ATTACHMENT_BYTES) {
-      throw new Error(
-        t("attachmentTotalTooLarge", {
-          max: formatFileSize(MAX_CHAT_TOTAL_ATTACHMENT_BYTES),
-        })
-      );
-    }
-
     let dataUrl = "";
     try {
       dataUrl = await readFileAsDataUrl(attachment.file);
