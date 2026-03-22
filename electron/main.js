@@ -427,7 +427,16 @@ function createMainWindow() {
   configureMainWindowPermissions(mainWindow);
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url);
+    let protocol = "";
+    try {
+      protocol = new URL(String(url || "")).protocol;
+    } catch {
+      return { action: "deny" };
+    }
+
+    if (protocol === "http:" || protocol === "https:") {
+      shell.openExternal(url);
+    }
     return { action: "deny" };
   });
   mainWindow.webContents.on("did-finish-load", () => {

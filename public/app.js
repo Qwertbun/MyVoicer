@@ -5291,6 +5291,11 @@ function buildChatAttachmentCaption(attachment) {
   return sizeLabel ? `${attachment.name} (${sizeLabel})` : attachment.name;
 }
 
+function isInlineBlobLikeUrl(url) {
+  const cleanUrl = String(url || "").trim().toLowerCase();
+  return cleanUrl.startsWith("blob:") || cleanUrl.startsWith("data:");
+}
+
 function createChatAttachmentElement(attachment, messageId = "", roomId = "") {
   const wrapper = document.createElement("div");
   wrapper.className = "chat-attachment";
@@ -5318,17 +5323,21 @@ function createChatAttachmentElement(attachment, messageId = "", roomId = "") {
   }
 
   if (attachment.previewKind === "image") {
-    const link = document.createElement("a");
-    link.href = attachment.url;
-    link.target = "_blank";
-    link.rel = "noopener noreferrer";
-
     const image = document.createElement("img");
     image.src = attachment.url;
     image.loading = "lazy";
     image.alt = t("attachmentImageLabel", { name: attachment.name });
-    link.appendChild(image);
-    wrapper.appendChild(link);
+
+    if (isInlineBlobLikeUrl(attachment.url)) {
+      wrapper.appendChild(image);
+    } else {
+      const link = document.createElement("a");
+      link.href = attachment.url;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.appendChild(image);
+      wrapper.appendChild(link);
+    }
   } else if (attachment.previewKind === "video") {
     const video = document.createElement("video");
     video.src = attachment.url;
@@ -5341,8 +5350,10 @@ function createChatAttachmentElement(attachment, messageId = "", roomId = "") {
     const fileLink = document.createElement("a");
     fileLink.className = "chat-attachment-file-link";
     fileLink.href = attachment.url;
-    fileLink.target = "_blank";
-    fileLink.rel = "noopener noreferrer";
+    if (!isInlineBlobLikeUrl(attachment.url)) {
+      fileLink.target = "_blank";
+      fileLink.rel = "noopener noreferrer";
+    }
     fileLink.download = attachment.name;
     fileLink.textContent = buildChatAttachmentCaption(attachment);
     fileLink.setAttribute("aria-label", t("attachmentFileLabel", { name: attachment.name }));
