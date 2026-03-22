@@ -198,6 +198,7 @@ const RELAY_HISTORY_REPLAY_LIMIT = 500;
 const RELAY_HISTORY_REPLAY_MAX_BYTES = 64 * 1024 * 1024;
 const RELAY_ATTACHMENT_CHUNK_SIZE = 256 * 1024;
 const RELAY_ATTACHMENT_REQUEST_TIMEOUT_MS = 30000;
+const RELAY_INLINE_ATTACHMENT_EMIT_MAX_BYTES = 2 * 1024 * 1024;
 const RELAY_IDB_NAME = "qwerbentum_relay_v1";
 const RELAY_IDB_VERSION = 1;
 const RELAY_STORE_MESSAGES = "cipher_messages";
@@ -5665,6 +5666,15 @@ async function buildRelayEncryptedChatPacket(roomId, text) {
   for (const attachment of pendingChatAttachments) {
     const attachmentId = createRelayRequestId("att");
     const encrypted = await encryptRelayAttachmentPayload(cleanRoomId, attachment);
+    const attachmentPayload = {
+      messageId,
+      attachmentId,
+      name: attachment.name,
+      mimeType: attachment.mimeType,
+      size: attachment.size,
+      iv: encrypted.iv,
+      ciphertext: encrypted.ciphertext,
+    };
 
     attachmentRefs.push({
       messageId,
@@ -5674,15 +5684,14 @@ async function buildRelayEncryptedChatPacket(roomId, text) {
       size: attachment.size,
     });
 
-    attachmentPayloads.push({
-      messageId,
-      attachmentId,
-      name: attachment.name,
-      mimeType: attachment.mimeType,
-      size: attachment.size,
-      iv: encrypted.iv,
-      ciphertext: encrypted.ciphertext,
-    });
+    await storeRelayAttachmentCipher(cleanRoomId, attachmentPayload);
+    if (selfId) {
+      registerRelayAttachmentSource(cleanRoomId, messageId, attachmentId, selfId);
+    }
+
+    if (String(attachmentPayload.ciphertext || "").length <= RELAY_INLINE_ATTACHMENT_EMIT_MAX_BYTES) {
+      attachmentPayloads.push(attachmentPayload);
+    }
   }
 
   const encryptedPayload = await encryptRelayPayload(cleanRoomId, {

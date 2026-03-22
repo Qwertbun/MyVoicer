@@ -131,6 +131,10 @@ async function main() {
       timeoutMs: 15000,
       predicate: (payload) => payload?.envelope?.messageId === messageId,
     });
+    const senderChatPromise = waitForEvent(sender, "chat-message", {
+      timeoutMs: 15000,
+      predicate: (payload) => payload?.envelope?.messageId === messageId,
+    });
 
     sender.emit("chat-message", {
       envelope: {
@@ -165,19 +169,31 @@ async function main() {
       ],
     });
 
-    const receiverPayload = await receiverChatPromise;
+    const [receiverPayload, senderPayload] = await Promise.all([
+      receiverChatPromise,
+      senderChatPromise,
+    ]);
     assert.ok(receiverPayload?.envelope, "receiver should get relay envelope");
     assert.equal(receiverPayload.envelope.messageId, messageId);
     assert.ok(Array.isArray(receiverPayload.attachmentPayloads));
-    assert.equal(receiverPayload.attachmentPayloads.length, 1);
+    assert.equal(
+      receiverPayload.attachmentPayloads.length,
+      0,
+      "receiver should not get large inline attachment payloads"
+    );
 
-    const receivedAttachmentPayload = receiverPayload.attachmentPayloads[0];
+    assert.ok(senderPayload?.envelope, "sender should get relay envelope echo");
+    assert.equal(senderPayload.envelope.messageId, messageId);
+    assert.ok(Array.isArray(senderPayload.attachmentPayloads));
+    assert.equal(senderPayload.attachmentPayloads.length, 1);
+
+    const receivedAttachmentPayload = senderPayload.attachmentPayloads[0];
     assert.equal(receivedAttachmentPayload.attachmentId, attachmentId);
     assert.equal(receivedAttachmentPayload.messageId, messageId);
     assert.equal(
       String(receivedAttachmentPayload.ciphertext || "").length,
       largeCiphertext.length,
-      "relay attachment ciphertext should not be truncated by server sanitize layer"
+      "sender echo should preserve full relay attachment ciphertext"
     );
 
     assert.equal(
@@ -186,7 +202,7 @@ async function main() {
       `sender should not receive chat-error, got: ${senderChatErrors.join(", ")}`
     );
 
-    console.log("PASS: relay large attachment payload is not truncated");
+    console.log("PASS: relay large attachment payload is routed safely");
   } finally {
     for (const socket of sockets) {
       try {
@@ -211,8 +227,7 @@ async function main() {
 }
 
 main().catch((error) => {
-  console.error("FAIL: relay large attachment payload is not truncated");
+  console.error("FAIL: relay large attachment payload is routed safely");
   console.error(error);
   process.exit(1);
 });
-

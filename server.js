@@ -42,6 +42,7 @@ const RELAY_MAX_ATTACHMENT_CHUNK_BYTES = 8 * 1024 * 1024;
 const RELAY_MAX_ENVELOPE_CIPHERTEXT_BYTES = 2 * 1024 * 1024;
 const RELAY_MAX_ATTACHMENT_PAYLOAD_CIPHERTEXT_BYTES = SOCKET_MAX_HTTP_BUFFER_SIZE;
 const RELAY_MAX_ATTACHMENT_CHUNK_TEXT_BYTES = 12 * 1024 * 1024;
+const RELAY_INLINE_ATTACHMENT_BROADCAST_MAX_BYTES = 2 * 1024 * 1024;
 const CHAT_MIME_EXTENSION_FALLBACKS = Object.freeze({
   "image/jpeg": "jpg",
   "image/png": "png",
@@ -1795,8 +1796,22 @@ io.on("connection", (socket) => {
         }
         return true;
       });
+      const inlineAttachmentCiphertextLength = alignedAttachmentPayloads.reduce(
+        (acc, item) => acc + String(item?.ciphertext || "").length,
+        0
+      );
+      const attachmentPayloadsForPeers = inlineAttachmentCiphertextLength > 0
+        && inlineAttachmentCiphertextLength <= RELAY_INLINE_ATTACHMENT_BROADCAST_MAX_BYTES
+        ? alignedAttachmentPayloads
+        : [];
 
-      io.to(roomId).emit("chat-message", {
+      socket.to(roomId).emit("chat-message", {
+        roomId,
+        sourceId: socket.id,
+        envelope: sanitizedEnvelope,
+        attachmentPayloads: attachmentPayloadsForPeers,
+      });
+      io.to(socket.id).emit("chat-message", {
         roomId,
         sourceId: socket.id,
         envelope: sanitizedEnvelope,
