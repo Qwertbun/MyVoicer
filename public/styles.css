@@ -1697,6 +1697,7 @@ body.is-electron-runtime .window-chrome {
   padding: 14px 8px;
   overflow-y: auto;
   scrollbar-gutter: stable;
+  scrollbar-gutter: stable both-edges;
   animation: panel-enter var(--motion-slow) var(--motion-ease) both;
   animation-delay: 30ms;
 }
