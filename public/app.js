@@ -62,6 +62,7 @@ const chatAttachBtn = document.getElementById("chat-attach-btn");
 const chatFileInput = document.getElementById("chat-file-input");
 const chatAttachmentsPreviewEl = document.getElementById("chat-attachments-preview");
 const chatMessagesEl = document.getElementById("chat-messages");
+const chatColumnEl = document.querySelector(".chat-column");
 const chatRoomTitleEl = document.getElementById("chat-room-title");
 const channelRoomLabelEl = document.getElementById("channel-room-label");
 const textChannelsTitleEl = document.getElementById("text-channels-title");
@@ -1146,6 +1147,7 @@ const chatMessageIds = new Set();
 const pendingChatAttachments = [];
 let pendingChatAttachmentSeq = 0;
 let chatSubmitInProgress = false;
+let chatDropTargetDepth = 0;
 let activeChatEditMessageId = null;
 let chatEditDraftText = "";
 let chatEditRemovedAttachmentIds = new Set();
@@ -4582,6 +4584,12 @@ function updateChatAvailability() {
   const enabled = joined && !chatSubmitInProgress;
   document.body.classList.toggle("is-lobby-mode", !joined);
   updateTopbarMeta();
+  if (!enabled) {
+    chatDropTargetDepth = 0;
+    if (chatColumnEl) {
+      chatColumnEl.classList.remove("chat-drop-active");
+    }
+  }
   if (chatInput) {
     chatInput.disabled = !enabled;
   }
@@ -5545,6 +5553,39 @@ function appendPendingChatAttachments(files) {
   }
 
   renderPendingChatAttachments();
+}
+
+function eventHasFilePayload(event) {
+  const types = event?.dataTransfer?.types;
+  if (!types) {
+    return false;
+  }
+
+  if (typeof types.includes === "function") {
+    return types.includes("Files");
+  }
+
+  return Array.from(types).includes("Files");
+}
+
+function setChatDropTargetActive(active) {
+  if (!chatColumnEl) {
+    return;
+  }
+  chatColumnEl.classList.toggle("chat-drop-active", Boolean(active));
+}
+
+function resetChatDropTargetState() {
+  chatDropTargetDepth = 0;
+  setChatDropTargetActive(false);
+}
+
+function extractDroppedFiles(event) {
+  const files = event?.dataTransfer?.files;
+  if (!files) {
+    return [];
+  }
+  return Array.from(files).filter((file) => file instanceof File);
 }
 
 async function buildOutgoingChatAttachmentPayloads() {
@@ -10873,6 +10914,74 @@ if (chatAttachBtn && chatFileInput) {
     const files = Array.from(chatFileInput.files || []);
     appendPendingChatAttachments(files);
     chatFileInput.value = "";
+  });
+}
+
+if (chatColumnEl) {
+  chatColumnEl.addEventListener("dragenter", (event) => {
+    if (!eventHasFilePayload(event)) {
+      return;
+    }
+
+    event.preventDefault();
+    if (!joined || chatSubmitInProgress) {
+      resetChatDropTargetState();
+      return;
+    }
+
+    chatDropTargetDepth += 1;
+    setChatDropTargetActive(true);
+  });
+
+  chatColumnEl.addEventListener("dragover", (event) => {
+    if (!eventHasFilePayload(event)) {
+      return;
+    }
+
+    event.preventDefault();
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = joined && !chatSubmitInProgress ? "copy" : "none";
+    }
+
+    if (!joined || chatSubmitInProgress) {
+      resetChatDropTargetState();
+      return;
+    }
+
+    setChatDropTargetActive(true);
+  });
+
+  chatColumnEl.addEventListener("dragleave", (event) => {
+    if (!eventHasFilePayload(event)) {
+      return;
+    }
+
+    event.preventDefault();
+    if (!joined || chatSubmitInProgress) {
+      resetChatDropTargetState();
+      return;
+    }
+
+    chatDropTargetDepth = Math.max(0, chatDropTargetDepth - 1);
+    if (chatDropTargetDepth === 0) {
+      setChatDropTargetActive(false);
+    }
+  });
+
+  chatColumnEl.addEventListener("drop", (event) => {
+    if (!eventHasFilePayload(event)) {
+      return;
+    }
+
+    event.preventDefault();
+    const files = extractDroppedFiles(event);
+    resetChatDropTargetState();
+
+    if (!joined || chatSubmitInProgress || files.length === 0) {
+      return;
+    }
+
+    appendPendingChatAttachments(files);
   });
 }
 
