@@ -10,3 +10,8 @@ certs/letsencrypt/archive/
 certs/letsencrypt/live/
 certs/letsencrypt/logs/
 certs/letsencrypt/work/
+build/installerIcon.ico
+build/uninstallerIcon.ico
+build/installerHeader.bmp
+build/installerSidebar.bmp
+build/uninstallerSidebar.bmp

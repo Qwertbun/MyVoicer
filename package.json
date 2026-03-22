@@ -5,6 +5,7 @@
   "main": "electron/main.js",
   "scripts": {
     "icons:build": "node scripts/generate-icons.js",
+    "installer:assets": "node scripts/generate-installer-assets.js",
     "start": "node scripts/run-electron.js",
     "start:electron": "node scripts/run-electron.js",
     "start:web": "node scripts/run-web-server.js server",
@@ -26,8 +27,8 @@
   "dependencies": {
     "autobase": "^7.27.3",
     "b4a": "^1.8.0",
-    "compact-encoding": "^2.19.0",
-    "corestore": "^7.9.1",
+    "compact-encoding": "^2.19.1",
+    "corestore": "^7.9.2",
     "electron-updater": "^6.6.2",
     "express": "^5.2.1",
     "hyperbee": "^2.27.3",
@@ -38,7 +39,7 @@
   "devDependencies": {
     "electron": "^41.0.3",
     "electron-builder": "^26.8.2",
-    "png-to-ico": "^2.1.8",
+    "png-to-ico": "^3.0.1",
     "sharp": "^0.34.5",
     "socket.io-client": "^4.8.3"
   },
@@ -82,6 +83,20 @@
           ]
         }
       ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "allowElevation": true,
+      "createDesktopShortcut": "always",
+      "createStartMenuShortcut": true,
+      "shortcutName": "Synto",
+      "uninstallDisplayName": "Synto",
+      "installerIcon": "build/installerIcon.ico",
+      "uninstallerIcon": "build/uninstallerIcon.ico",
+      "installerHeader": "build/installerHeader.bmp",
+      "installerSidebar": "build/installerSidebar.bmp",
+      "uninstallerSidebar": "build/uninstallerSidebar.bmp"
     }
   }
 }

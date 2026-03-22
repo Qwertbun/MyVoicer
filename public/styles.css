@@ -48,6 +48,8 @@
   --danger-soft-text: #ff8588;
   --member-rail: rgba(149, 157, 169, 0.25);
   --avatar-neutral: #41454d;
+  --voice-wave-1-color: color-mix(in srgb, var(--accent) 78%, #ffffff 22%);
+  --voice-wave-2-color: color-mix(in srgb, var(--tag-screen-bg) 72%, #ffffff 28%);
   --success-pill: #23a55a;
   --topbar-bg: #2f3136;
   --chat-form-bg: #2f3136;
@@ -2285,6 +2287,8 @@ button.danger:hover {
 .voice-room-avatar {
   width: 18px;
   height: 18px;
+  position: relative;
+  isolation: isolate;
   border-radius: 50%;
   background: var(--avatar-neutral);
   color: var(--text-inverse);
@@ -2293,6 +2297,75 @@ button.danger:hover {
   font-size: 10px;
   font-weight: 700;
   flex-shrink: 0;
+}
+
+.voice-room-avatar::before,
+.voice-room-avatar::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+  pointer-events: none;
+  opacity: 0;
+  -webkit-mask:
+    radial-gradient(circle, transparent calc(50% - 2px), #000 calc(50% - 0.7px), #000 calc(50% + 0.7px), transparent calc(50% + 2px));
+  mask:
+    radial-gradient(circle, transparent calc(50% - 2px), #000 calc(50% - 0.7px), #000 calc(50% + 0.7px), transparent calc(50% + 2px));
+  will-change: transform, opacity;
+}
+
+.voice-room-avatar::before {
+  background:
+    conic-gradient(
+      from 20deg,
+      transparent 0deg 34deg,
+      var(--voice-wave-1-color) 82deg,
+      transparent 166deg 214deg,
+      var(--voice-wave-1-color) 270deg,
+      transparent 336deg 360deg
+    );
+  filter: drop-shadow(0 0 5px color-mix(in srgb, var(--voice-wave-1-color) 52%, transparent));
+}
+
+.voice-room-avatar::after {
+  background:
+    conic-gradient(
+      from 180deg,
+      transparent 0deg 44deg,
+      var(--voice-wave-2-color) 102deg,
+      transparent 188deg 232deg,
+      var(--voice-wave-2-color) 304deg,
+      transparent 346deg 360deg
+    );
+  filter: drop-shadow(0 0 6px color-mix(in srgb, var(--voice-wave-2-color) 54%, transparent));
+}
+
+.voice-room-avatar.is-speaking::before {
+  opacity: 1;
+  animation: voice-wave-chase-a 1.58s linear infinite;
+}
+
+.voice-room-avatar.is-speaking::after {
+  opacity: 1;
+  animation: voice-wave-chase-b 1.08s linear infinite;
+}
+
+@keyframes voice-wave-chase-a {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes voice-wave-chase-b {
+  from {
+    transform: rotate(-108deg);
+  }
+  to {
+    transform: rotate(252deg);
+  }
 }
 
 .voice-room-member-name {

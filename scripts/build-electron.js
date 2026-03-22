@@ -1,7 +1,7 @@
 "use strict";
 
 const path = require("path");
-const { spawn } = require("node:child_process");
+const { spawn, spawnSync } = require("node:child_process");
 
 function getTimestampFolderName(date) {
   const pad = (value) => String(value).padStart(2, "0");
@@ -27,6 +27,25 @@ const generatedOutputPath = path.join("release", getTimestampFolderName(new Date
 const finalArgs = hasOutputArg
   ? passthroughArgs
   : [...passthroughArgs, `--config.directories.output=${generatedOutputPath}`];
+
+const installerAssetsScript = path.join(__dirname, "generate-installer-assets.js");
+const assetsBuild = spawnSync(process.execPath, [installerAssetsScript], {
+  stdio: "inherit",
+  env: process.env,
+});
+
+if (assetsBuild.error) {
+  throw assetsBuild.error;
+}
+
+if (assetsBuild.signal) {
+  process.kill(process.pid, assetsBuild.signal);
+  process.exit(1);
+}
+
+if ((assetsBuild.status ?? 1) !== 0) {
+  process.exit(assetsBuild.status ?? 1);
+}
 
 const cliEntrypoint = require.resolve("electron-builder/out/cli/cli.js");
 const child = spawn(process.execPath, [cliEntrypoint, ...finalArgs], {
