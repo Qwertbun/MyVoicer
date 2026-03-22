@@ -197,7 +197,7 @@ const RELAY_KDF_HASH = "SHA-256";
 const RELAY_HISTORY_REPLAY_LIMIT = 500;
 const RELAY_HISTORY_REPLAY_MAX_BYTES = 64 * 1024 * 1024;
 const RELAY_ATTACHMENT_CHUNK_SIZE = 256 * 1024;
-const RELAY_ATTACHMENT_REQUEST_TIMEOUT_MS = 8000;
+const RELAY_ATTACHMENT_REQUEST_TIMEOUT_MS = 30000;
 const RELAY_IDB_NAME = "qwerbentum_relay_v1";
 const RELAY_IDB_VERSION = 1;
 const RELAY_STORE_MESSAGES = "cipher_messages";
@@ -4834,6 +4834,7 @@ async function decryptRelayEnvelopeToMessage(envelope, sourceId = "") {
   }
 
   const payload = decrypted && typeof decrypted === "object" ? decrypted : {};
+  const messageUserId = String(payload.userId || normalizedEnvelope.senderId || "").trim();
   const attachments = Array.isArray(normalizedEnvelope.attachmentRefs)
     ? normalizedEnvelope.attachmentRefs.map((item) => createRelayAttachmentViewModel(
       normalizedEnvelope.roomId,
@@ -4849,6 +4850,14 @@ async function decryptRelayEnvelopeToMessage(envelope, sourceId = "") {
       attachment.id,
       sourceId || normalizedEnvelope.senderId
     );
+    if (selfId && messageUserId && messageUserId === CHAT_AUTHOR_ID) {
+      registerRelayAttachmentSource(
+        normalizedEnvelope.roomId,
+        normalizedEnvelope.messageId,
+        attachment.id,
+        selfId
+      );
+    }
     await hydrateRelayAttachmentUrl(
       normalizedEnvelope.roomId,
       normalizedEnvelope.messageId,
@@ -4859,7 +4868,7 @@ async function decryptRelayEnvelopeToMessage(envelope, sourceId = "") {
   return {
     id: normalizedEnvelope.messageId,
     roomId: normalizedEnvelope.roomId,
-    userId: String(payload.userId || normalizedEnvelope.senderId || ""),
+    userId: messageUserId,
     userName: String(payload.userName || t("guest")).trim() || t("guest"),
     text: String(payload.text || ""),
     attachments,
@@ -5106,8 +5115,36 @@ async function requestRelayAttachmentFromPeers(roomId, messageId, attachment) {
     return true;
   }
 
-  const sources = getRelayAttachmentSources(cleanRoomId, cleanMessageId, attachment.id)
-    .filter((sourceId) => sourceId && sourceId !== selfId);
+  const message = getChatMessageById(cleanMessageId);
+  const isOwnMessage = String(message?.userId || "").trim() === CHAT_AUTHOR_ID;
+  const knownSources = getRelayAttachmentSources(cleanRoomId, cleanMessageId, attachment.id)
+    .filter(Boolean);
+  if (selfId && isOwnMessage) {
+    knownSources.unshift(selfId);
+  }
+
+  const dedupedSources = Array.from(new Set(knownSources));
+  let sources = dedupedSources.filter((sourceId) => sourceId !== selfId);
+  if (selfId && dedupedSources.includes(selfId)) {
+    sources.push(selfId);
+  }
+  if (selfId && isOwnMessage) {
+    sources = [selfId, ...sources.filter((sourceId) => sourceId !== selfId)];
+  }
+  const activeRoomMemberIds = Array.isArray(roomState?.members)
+    ? roomState.members
+        .map((member) => String(member?.id || "").trim())
+        .filter(Boolean)
+    : [];
+  for (const memberId of activeRoomMemberIds) {
+    if (memberId === selfId) {
+      continue;
+    }
+    if (!sources.includes(memberId)) {
+      sources.push(memberId);
+    }
+  }
+
   if (sources.length === 0) {
     setStatus(t("attachmentSourceUnavailable"));
     return false;

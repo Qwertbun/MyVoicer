@@ -1601,10 +1601,18 @@ io.on("connection", (socket) => {
     }
 
     const room = rooms.get(cleanRoomId);
-    if (!room || !room.members.has(socket.id) || !room.members.has(cleanTargetId)) {
+    if (!room || !room.members.has(socket.id)) {
       return;
     }
-    if (!isLocalSocketMember(cleanTargetId)) {
+    if (!room.members.has(cleanTargetId) || !isLocalSocketMember(cleanTargetId)) {
+      io.to(socket.id).emit("relay-attachment-response", {
+        roomId: cleanRoomId,
+        requestId: cleanRequestId,
+        targetId: socket.id,
+        sourceId: cleanTargetId,
+        attachmentRef: cleanAttachmentRef,
+        error: "attachment_source_unavailable",
+      });
       return;
     }
 
