@@ -39,6 +39,9 @@ const SERVER_FILE_UPLOADS_ENABLED = !RELAY_MODE_ENABLED;
 const RELAY_MAX_HISTORY_ENVELOPES = 500;
 const RELAY_MAX_HISTORY_BYTES = 64 * 1024 * 1024;
 const RELAY_MAX_ATTACHMENT_CHUNK_BYTES = 8 * 1024 * 1024;
+const RELAY_MAX_ENVELOPE_CIPHERTEXT_BYTES = 2 * 1024 * 1024;
+const RELAY_MAX_ATTACHMENT_PAYLOAD_CIPHERTEXT_BYTES = SOCKET_MAX_HTTP_BUFFER_SIZE;
+const RELAY_MAX_ATTACHMENT_CHUNK_TEXT_BYTES = 12 * 1024 * 1024;
 const CHAT_MIME_EXTENSION_FALLBACKS = Object.freeze({
   "image/jpeg": "jpg",
   "image/png": "png",
@@ -1293,6 +1296,23 @@ function normalizeRelayString(value, maxLength = 256) {
   return String(value || "").trim().slice(0, maxLength);
 }
 
+function normalizeRelayCiphertext(value, maxBytes = 0) {
+  const text = String(value || "").trim();
+  if (!text) {
+    return "";
+  }
+
+  const normalizedMaxBytes = Number(maxBytes);
+  if (Number.isFinite(normalizedMaxBytes) && normalizedMaxBytes > 0) {
+    const byteLength = Buffer.byteLength(text, "utf8");
+    if (byteLength > normalizedMaxBytes) {
+      return "";
+    }
+  }
+
+  return text;
+}
+
 function normalizeRelayRoomId(value) {
   const cleanRoomId = normalizeRoomIdValue(value);
   if (!cleanRoomId || cleanRoomId.toLowerCase() === "main") {
@@ -1340,7 +1360,10 @@ function sanitizeRelayEnvelope(value = {}) {
   const v = Number(value.v);
   const alg = normalizeRelayString(value.alg, 24);
   const iv = normalizeRelayString(value.iv, 128);
-  const ciphertext = normalizeRelayString(value.ciphertext, 1024 * 1024 * 2);
+  const ciphertext = normalizeRelayCiphertext(
+    value.ciphertext,
+    RELAY_MAX_ENVELOPE_CIPHERTEXT_BYTES
+  );
 
   if (!roomId || !messageId || !senderId) {
     return null;
@@ -1383,7 +1406,10 @@ function sanitizeRelayAttachmentPayload(value = {}) {
   const attachmentId = normalizeRelayString(value.attachmentId, 96);
   const messageId = normalizeRelayString(value.messageId, 96);
   const iv = normalizeRelayString(value.iv, 128);
-  const ciphertext = normalizeRelayString(value.ciphertext, 1024 * 1024 * 12);
+  const ciphertext = normalizeRelayCiphertext(
+    value.ciphertext,
+    RELAY_MAX_ATTACHMENT_PAYLOAD_CIPHERTEXT_BYTES
+  );
   const name = normalizeRelayString(value.name, 120);
   const mimeType = normalizeChatAttachmentMimeType(value.mimeType);
   const size = Number(value.size);
@@ -1409,7 +1435,7 @@ function sanitizeRelayAttachmentChunk(value = {}) {
     return null;
   }
 
-  const chunk = normalizeRelayString(value.chunk, 1024 * 1024 * 12);
+  const chunk = normalizeRelayCiphertext(value.chunk, RELAY_MAX_ATTACHMENT_CHUNK_TEXT_BYTES);
   const chunkIndex = Number(value.chunkIndex);
   const totalChunks = Number(value.totalChunks);
   const iv = normalizeRelayString(value.iv, 128);

@@ -30,6 +30,7 @@ const micSensitivityLabelEl = document.getElementById("mic-sensitivity-label");
 const micSensitivityRange = document.getElementById("mic-sensitivity-range");
 const micSensitivityValue = document.getElementById("mic-sensitivity-value");
 const screenBtn = document.getElementById("screen-btn");
+const relayRoomKeyBtn = document.getElementById("relay-room-key-btn");
 const leaveVoiceBtn = document.getElementById("leave-voice-btn");
 const leaveBtn = document.getElementById("leave-btn");
 const remoteAudios = document.getElementById("remote-audios");
@@ -248,6 +249,7 @@ const I18N = {
     joinSelectedServer: "Join Selected Server",
     createServer: "Create Server",
     micSensitivity: "Mic sensitivity",
+    changeRoomKey: "Change room key",
     leaveServer: "Leave server",
     statusLabel: "Status:",
     disconnected: "Disconnected",
@@ -306,6 +308,9 @@ const I18N = {
     relayAccessCodeRequired: "Room access code is required for encrypted relay mode.",
     decryptFailed: "Unable to decrypt message. Check room access code.",
     roomKeyRequired: "Encrypted relay room key is required.",
+    roomKeyChangeRelayOnly: "Room key can be changed only in relay mode.",
+    roomKeyUpdated: "Room key updated for this room on this device.",
+    roomKeyUpdateFailed: "Unable to update room key.",
     attachmentSourceUnavailable: "Attachment source is unavailable.",
     encryptedAttachment: "Encrypted attachment",
     downloadEncryptedAttachment: "Download encrypted attachment",
@@ -497,6 +502,7 @@ const I18N = {
     joinSelectedServer: "Подключиться к выбранному серверу",
     createServer: "Создать сервер",
     micSensitivity: "Чувствительность микрофона",
+    changeRoomKey: "Сменить ключ комнаты",
     leaveServer: "Покинуть сервер",
     statusLabel: "Статус:",
     disconnected: "Отключено",
@@ -555,6 +561,9 @@ const I18N = {
     relayAccessCodeRequired: "Для шифрованного relay-режима нужен код доступа комнаты.",
     decryptFailed: "Не удалось расшифровать сообщение. Проверьте код доступа комнаты.",
     roomKeyRequired: "Нужен ключ шифрованной relay-комнаты.",
+    roomKeyChangeRelayOnly: "Смена ключа доступна только в relay-режиме.",
+    roomKeyUpdated: "Ключ комнаты обновлён на этом устройстве.",
+    roomKeyUpdateFailed: "Не удалось обновить ключ комнаты.",
     attachmentSourceUnavailable: "Источник вложения недоступен.",
     encryptedAttachment: "Шифрованное вложение",
     downloadEncryptedAttachment: "Скачать шифрованное вложение",
@@ -1786,6 +1795,7 @@ const MATERIAL_ICON_TEXT_FALLBACKS = Object.freeze({
   present_to_all: "▣",
   stop_screen_share: "◪",
   tune: "≡",
+  key: "K",
   call_end: "⨯",
   logout: "↩",
 });
@@ -3564,6 +3574,9 @@ function applyStaticTranslations() {
   }
   if (leaveBtn) {
     setControlButtonIcon(leaveBtn, "logout", t("leaveServer"));
+  }
+  if (relayRoomKeyBtn) {
+    setControlButtonIcon(relayRoomKeyBtn, "key", t("changeRoomKey"));
   }
   if (leaveVoiceBtn) {
     setControlButtonIcon(leaveVoiceBtn, "call_end", t("leaveVoiceChannel"));
@@ -8888,6 +8901,10 @@ function updateVoiceControlsAvailability() {
     leaveVoiceBtn.disabled = !inVoice;
   }
 
+  if (relayRoomKeyBtn) {
+    relayRoomKeyBtn.disabled = !joined || !isRelayModeActive() || !normalizeRoomIdValue(roomState?.id);
+  }
+
   if (!inVoice) {
     setMicSensitivityPopoverOpen(false);
   }
@@ -11165,6 +11182,33 @@ if (screenStageEmptyTriggerBtn) {
       return;
     }
     await startScreenShare();
+  });
+}
+
+if (relayRoomKeyBtn) {
+  relayRoomKeyBtn.addEventListener("click", async () => {
+    const roomId = normalizeRoomIdValue(roomState?.id);
+    if (!joined || !roomId) {
+      setStatus(t("joinServerFirst"));
+      return;
+    }
+
+    if (!isRelayModeActive()) {
+      setStatus(t("roomKeyChangeRelayOnly"));
+      return;
+    }
+
+    try {
+      const nextKey = await ensureRelayRoomKey(roomId, { forcePrompt: true });
+      if (!nextKey) {
+        return;
+      }
+
+      await loadRelayRoomHistory(roomId);
+      setStatus(t("roomKeyUpdated"));
+    } catch {
+      setStatus(t("roomKeyUpdateFailed"));
+    }
   });
 }
 
