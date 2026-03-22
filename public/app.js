@@ -134,7 +134,14 @@ const AUDIO_CAPTURE_FALLBACK_CONSTRAINTS = {
   ...DEFAULT_MIC_AUDIO_PROCESSING_CONSTRAINTS,
   autoGainControl: false,
 };
-const AUDIO_SENDER_MAX_BITRATE = 64000;
+const MIC_AUDIO_SENDER_MAX_BITRATE = 64000;
+const SCREEN_AUDIO_SENDER_MAX_BITRATE = 160000;
+const VOLUME_SLIDER_MIN = 0;
+const VOLUME_SLIDER_BASE = 100;
+const VOLUME_SLIDER_MAX = 200;
+const VOLUME_GAIN_MAX = 2;
+const VOLUME_CURVE_BELOW_BASE_EXP = 1.6;
+const VOLUME_CURVE_ABOVE_BASE_EXP = 1.2;
 const PEER_DISCONNECT_GRACE_MS = 8000;
 const MIC_CAPTURE_MUTE_GRACE_MS = 320;
 const DLOLMUS_COMMAND_PREFIX = "/dlolmus";
@@ -1769,7 +1776,7 @@ const MATERIAL_ICON_TEXT_FALLBACKS = Object.freeze({
   chevron_right: ">",
   edit: "✎",
   delete: "×",
-  mic: "◉",
+  mic: "🎤",
   mic_off: "⊘",
   hourglass_top: "⌛",
   present_to_all: "▣",
@@ -4009,6 +4016,25 @@ function getUserInitial(name) {
   return (normalized.charAt(0) || "G").toUpperCase();
 }
 
+function hashStableColorSeed(value) {
+  const text = String(value || "");
+  let hash = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    hash = ((hash << 5) - hash + text.charCodeAt(index)) | 0;
+  }
+  return Math.abs(hash);
+}
+
+function getVoiceWaveColorParams(userId) {
+  const baseSeed = hashStableColorSeed(userId);
+  const primaryHue = baseSeed % 360;
+  const secondaryHue = (primaryHue + 56) % 360;
+  return {
+    wave1Color: `hsl(${primaryHue} 93% 66% / 0.96)`,
+    wave2Color: `hsl(${secondaryHue} 95% 60% / 0.92)`,
+  };
+}
+
 async function requestCreateVoiceRoom() {
   if (!joined || !roomState) {
     setStatus(t("joinServerFirst"));
@@ -4243,6 +4269,12 @@ function renderVoiceChannels() {
 
       const avatar = document.createElement("span");
       avatar.className = "voice-room-avatar";
+      const waveColors = getVoiceWaveColorParams(member.id || member.name);
+      avatar.style.setProperty("--voice-wave-1-color", waveColors.wave1Color);
+      avatar.style.setProperty("--voice-wave-2-color", waveColors.wave2Color);
+      if (isUserSpeaking(member.id)) {
+        avatar.classList.add("is-speaking");
+      }
       avatar.textContent = getUserInitial(member.name);
 
       const name = document.createElement("span");
@@ -6614,7 +6646,7 @@ async function replaceOutboundMicTrackForPeers(nextOutboundTrack) {
 
     if (nextOutboundTrack) {
       applyVoiceTrackHints(nextOutboundTrack);
-      void optimizeAudioSender(entry.micSender);
+      void optimizeAudioSender(entry.micSender, { profile: "mic" });
     }
   }
 }
@@ -6736,6 +6768,20 @@ function applyVoiceTrackHints(track) {
   }
 }
 
+function applyScreenAudioTrackHints(track) {
+  if (!track) {
+    return;
+  }
+
+  if ("contentHint" in track) {
+    try {
+      track.contentHint = "music";
+    } catch {
+      // no-op
+    }
+  }
+}
+
 function applyScreenTrackHints(track) {
   if (!track) {
     return;
@@ -6817,7 +6863,7 @@ function configureSelfCaptureHandle() {
   }
 }
 
-async function optimizeAudioSender(sender) {
+async function optimizeAudioSender(sender, options = {}) {
   if (
     !sender ||
     !sender.track ||
@@ -6828,6 +6874,10 @@ async function optimizeAudioSender(sender) {
     return;
   }
 
+  const profile = options.profile === "screen" ? "screen" : "mic";
+  const targetMaxBitrate =
+    profile === "screen" ? SCREEN_AUDIO_SENDER_MAX_BITRATE : MIC_AUDIO_SENDER_MAX_BITRATE;
+
   try {
     const params = sender.getParameters() || {};
     const encodings =
@@ -6836,9 +6886,9 @@ async function optimizeAudioSender(sender) {
 
     if (
       typeof primaryEncoding.maxBitrate !== "number" ||
-      primaryEncoding.maxBitrate < AUDIO_SENDER_MAX_BITRATE
+      primaryEncoding.maxBitrate < targetMaxBitrate
     ) {
-      primaryEncoding.maxBitrate = AUDIO_SENDER_MAX_BITRATE;
+      primaryEncoding.maxBitrate = targetMaxBitrate;
     }
 
     primaryEncoding.dtx = false;
@@ -7332,11 +7382,57 @@ function getMicErrorMessage(error) {
 }
 
 function getUserVolume(userId) {
-  return userVolumes.get(userId) ?? 1;
+  return clamp(userVolumes.get(userId) ?? 1, 0, VOLUME_GAIN_MAX);
 }
 
 function getScreenAudioVolume(userId) {
-  return screenAudioVolumes.get(userId) ?? 1;
+  return clamp(screenAudioVolumes.get(userId) ?? 1, 0, VOLUME_GAIN_MAX);
+}
+
+function sliderPercentToVolumeGain(percentValue) {
+  const percent = clamp(Number(percentValue) || 0, VOLUME_SLIDER_MIN, VOLUME_SLIDER_MAX);
+  if (percent <= VOLUME_SLIDER_MIN) {
+    return 0;
+  }
+
+  if (percent <= VOLUME_SLIDER_BASE) {
+    const normalized = percent / VOLUME_SLIDER_BASE;
+    return clamp(Math.pow(normalized, VOLUME_CURVE_BELOW_BASE_EXP), 0, 1);
+  }
+
+  const boostNormalized =
+    (percent - VOLUME_SLIDER_BASE) / (VOLUME_SLIDER_MAX - VOLUME_SLIDER_BASE);
+  const boostedGain = 1 + Math.pow(boostNormalized, VOLUME_CURVE_ABOVE_BASE_EXP);
+  return clamp(boostedGain, 0, VOLUME_GAIN_MAX);
+}
+
+function volumeGainToSliderPercent(gainValue) {
+  const gain = clamp(Number(gainValue) || 0, 0, VOLUME_GAIN_MAX);
+  if (gain <= 0) {
+    return VOLUME_SLIDER_MIN;
+  }
+
+  if (gain <= 1) {
+    const normalized = Math.pow(gain, 1 / VOLUME_CURVE_BELOW_BASE_EXP);
+    return clamp(
+      normalized * VOLUME_SLIDER_BASE,
+      VOLUME_SLIDER_MIN,
+      VOLUME_SLIDER_BASE
+    );
+  }
+
+  const boostedPart = clamp(gain - 1, 0, 1);
+  const boostNormalized = Math.pow(boostedPart, 1 / VOLUME_CURVE_ABOVE_BASE_EXP);
+  return clamp(
+    VOLUME_SLIDER_BASE + boostNormalized * (VOLUME_SLIDER_MAX - VOLUME_SLIDER_BASE),
+    VOLUME_SLIDER_BASE,
+    VOLUME_SLIDER_MAX
+  );
+}
+
+function formatVolumePercentLabel(percentValue) {
+  const percent = Math.round(clamp(Number(percentValue) || 0, VOLUME_SLIDER_MIN, VOLUME_SLIDER_MAX));
+  return `${percent}%`;
 }
 
 function hasScreenAudioTrack(userId) {
@@ -7368,7 +7464,7 @@ function setScreenAudioMuted(userId, muted) {
 }
 
 function setScreenAudioVolume(userId, value) {
-  const volume = clamp(value, 0, 2);
+  const volume = clamp(value, 0, VOLUME_GAIN_MAX);
   screenAudioVolumes.set(userId, volume);
   applyUserVolume(userId);
 }
@@ -7490,6 +7586,7 @@ function ensureSpeakingDetectionLoop() {
 
     if (speakingChanged) {
       renderParticipants();
+      renderVoiceChannels();
     }
   }, SPEAKING_DETECTION_INTERVAL_MS);
 }
@@ -7502,9 +7599,14 @@ function stopSpeakingDetectionLoop() {
 }
 
 function clearSpeakingDetectionState() {
+  const hadSpeaking = speakingUserIds.size > 0;
   stopSpeakingDetectionLoop();
   speakingStateByUserId.clear();
   speakingUserIds.clear();
+  if (hadSpeaking) {
+    renderParticipants();
+    renderVoiceChannels();
+  }
 }
 
 function cleanupSpeakingDetectionForUser(userId) {
@@ -7512,6 +7614,7 @@ function cleanupSpeakingDetectionForUser(userId) {
   const hadSpeaking = speakingUserIds.delete(userId);
   if (hadSpeaking) {
     renderParticipants();
+    renderVoiceChannels();
   }
 
   if (remoteVoice.size === 0) {
@@ -7788,7 +7891,7 @@ function applyUserVolume(userId) {
 }
 
 function setUserVolume(userId, value) {
-  const volume = clamp(value, 0, 2);
+  const volume = clamp(value, 0, VOLUME_GAIN_MAX);
   userVolumes.set(userId, volume);
   applyUserVolume(userId);
 }
@@ -7973,17 +8076,17 @@ function renderParticipants() {
 
       const input = document.createElement("input");
       input.type = "range";
-      input.min = "0";
-      input.max = "200";
+      input.min = String(VOLUME_SLIDER_MIN);
+      input.max = String(VOLUME_SLIDER_MAX);
       input.step = "1";
-      input.value = String(Math.round(getUserVolume(member.id) * 100));
+      input.value = String(Math.round(volumeGainToSliderPercent(getUserVolume(member.id))));
 
       const value = document.createElement("span");
-      value.textContent = `${input.value}%`;
+      value.textContent = formatVolumePercentLabel(input.value);
 
       input.addEventListener("input", () => {
-        value.textContent = `${input.value}%`;
-        setUserVolume(member.id, Number(input.value) / 100);
+        value.textContent = formatVolumePercentLabel(input.value);
+        setUserVolume(member.id, sliderPercentToVolumeGain(input.value));
       });
 
       volumeWrap.appendChild(label);
@@ -8501,9 +8604,11 @@ function renderScreenStage(activeItem, totalStreams) {
     } else {
       screenStageAudioControlsEl.classList.remove("hidden");
       screenStageVolumeRangeEl.disabled = !hasScreenAudio;
-      screenStageVolumeRangeEl.value = String(Math.round(getScreenAudioVolume(activeItem.userId) * 100));
+      screenStageVolumeRangeEl.value = String(
+        Math.round(volumeGainToSliderPercent(getScreenAudioVolume(activeItem.userId)))
+      );
       screenStageVolumeValueEl.textContent = hasScreenAudio
-        ? `${screenStageVolumeRangeEl.value}%`
+        ? formatVolumePercentLabel(screenStageVolumeRangeEl.value)
         : t("noAudio");
     }
   }
@@ -8936,7 +9041,9 @@ function syncForwardingForPeer(targetPeerId) {
        activeSender = sender;
       if (info.track.kind === "audio") {
         applyPreferredAudioCodecsToTransceiver(transceiver, true);
-        void optimizeAudioSender(sender);
+        void optimizeAudioSender(sender, {
+          profile: info.voiceType === "screen" ? "screen" : "mic",
+        });
       }
       entry.forwardedSenders.set(key, {
         sender,
@@ -9114,7 +9221,7 @@ function createPeerConnection(peerId) {
       entry.micSender = micSender;
       const micTransceiver = pc.getTransceivers().find((item) => item.sender === micSender) || null;
       applyPreferredAudioCodecsToTransceiver(micTransceiver, true);
-      void optimizeAudioSender(micSender);
+      void optimizeAudioSender(micSender, { profile: "mic" });
     }
 
     pc.ontrack = (event) => {
@@ -9646,11 +9753,11 @@ async function publishLocalScreenToHost(options = {}) {
 
     if (canSendScreenAudio && entry.screenAudioSender) {
       if (audioTrack) {
-        applyVoiceTrackHints(audioTrack);
+        applyScreenAudioTrackHints(audioTrack);
       }
       await entry.screenAudioSender.replaceTrack(audioTrack || null);
       if (audioTrack) {
-        void optimizeAudioSender(entry.screenAudioSender);
+        void optimizeAudioSender(entry.screenAudioSender, { profile: "screen" });
       }
     }
 
@@ -9767,6 +9874,9 @@ async function startScreenShare() {
     }
 
     applyScreenTrackHints(videoTrack);
+    if (audioTrack) {
+      applyScreenAudioTrackHints(audioTrack);
+    }
     localScreenStream = stream;
     localScreenTrack = videoTrack;
     localScreenAudioTrack = audioTrack;
@@ -10069,6 +10179,7 @@ function resetSessionState() {
 
   sourceMedia.clear();
   screenAudioTrackIdsBySource.clear();
+  userVolumes.clear();
   screenAudioVolumes.clear();
   stopScreenAbrLoop();
   screenSenderAbrStateByKey.clear();
@@ -10830,13 +10941,19 @@ if (screenStageMuteBtn) {
 }
 
 if (screenStageVolumeRangeEl) {
+  screenStageVolumeRangeEl.min = String(VOLUME_SLIDER_MIN);
+  screenStageVolumeRangeEl.max = String(VOLUME_SLIDER_MAX);
+  screenStageVolumeRangeEl.step = "1";
   screenStageVolumeRangeEl.addEventListener("input", () => {
     if (!activeScreenStageItem || activeScreenStageItem.isLocal) {
       return;
     }
-    setScreenAudioVolume(activeScreenStageItem.userId, Number(screenStageVolumeRangeEl.value) / 100);
+    setScreenAudioVolume(
+      activeScreenStageItem.userId,
+      sliderPercentToVolumeGain(screenStageVolumeRangeEl.value)
+    );
     if (screenStageVolumeValueEl) {
-      screenStageVolumeValueEl.textContent = `${screenStageVolumeRangeEl.value}%`;
+      screenStageVolumeValueEl.textContent = formatVolumePercentLabel(screenStageVolumeRangeEl.value);
     }
   });
 }
