@@ -830,6 +830,46 @@ function emitWatchedRoomChatMessage(roomId, message) {
   }
 }
 
+function emitWatchedRoomRelayEnvelope(roomId, envelope, sourceId = "") {
+  const cleanRoomId = normalizeRoomIdValue(roomId);
+  if (!cleanRoomId) {
+    return;
+  }
+
+  const sanitizedEnvelope = sanitizeRelayEnvelope(envelope);
+  if (!sanitizedEnvelope || sanitizedEnvelope.roomId !== cleanRoomId) {
+    return;
+  }
+
+  const notificationEnvelope = {
+    v: sanitizedEnvelope.v,
+    alg: sanitizedEnvelope.alg,
+    roomId: sanitizedEnvelope.roomId,
+    messageId: sanitizedEnvelope.messageId,
+    senderId: sanitizedEnvelope.senderId,
+    createdAt: sanitizedEnvelope.createdAt,
+    iv: sanitizedEnvelope.iv,
+    ciphertext: sanitizedEnvelope.ciphertext,
+  };
+  const cleanSourceId = normalizeRelayString(sourceId, 96);
+
+  for (const clientSocket of io.sockets.sockets.values()) {
+    const watchedRoomIds = clientSocket?.data?.watchedRoomIds;
+    if (!(watchedRoomIds instanceof Set) || !watchedRoomIds.has(cleanRoomId)) {
+      continue;
+    }
+    if (normalizeRoomIdValue(clientSocket?.data?.roomId) === cleanRoomId) {
+      continue;
+    }
+
+    clientSocket.emit("saved-room-relay-envelope", {
+      roomId: cleanRoomId,
+      sourceId: cleanSourceId,
+      envelope: notificationEnvelope,
+    });
+  }
+}
+
 function isPathInside(parentPath, targetPath) {
   const parent = path.resolve(parentPath);
   const target = path.resolve(targetPath);
@@ -1753,6 +1793,7 @@ io.on("connection", (socket) => {
         envelope: sanitizedEnvelope,
         attachmentPayloads: alignedAttachmentPayloads,
       });
+      emitWatchedRoomRelayEnvelope(roomId, sanitizedEnvelope, socket.id);
       return;
     }
 

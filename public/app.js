@@ -481,6 +481,8 @@ const I18N = {
     notificationSummaryBody: "{count} new messages. Last: {author}: {text}",
     notificationMentionTitle: "Mention in {room}",
     notificationMentionBody: "{author} mentioned you: {text}",
+    notificationRelayFallbackTitle: "New encrypted message in {room}",
+    notificationRelayFallbackBody: "Open this room to read encrypted messages.",
     warningHttps: "Warning: open via HTTPS on other PCs, otherwise microphone request may be blocked.",
   },
   ru: {
@@ -728,6 +730,8 @@ const I18N = {
     notificationSummaryBody: "{count} новых сообщений. Последнее: {author}: {text}",
     notificationMentionTitle: "Упоминание в {room}",
     notificationMentionBody: "{author} упомянул вас: {text}",
+    notificationRelayFallbackTitle: "Новое шифрованное сообщение в {room}",
+    notificationRelayFallbackBody: "Откройте комнату, чтобы прочитать шифрованные сообщения.",
     warningHttps:
       "Предупреждение: на других ПК открывайте по HTTPS, иначе запрос микрофона может быть заблокирован.",
   },
@@ -2704,6 +2708,39 @@ async function ensureRelayRoomKey(roomId, { forcePrompt = false } = {}) {
   }
 }
 
+async function getRelayRoomKeySilently(roomId) {
+  const cleanRoomId = normalizeRoomIdValue(roomId);
+  if (!cleanRoomId) {
+    return null;
+  }
+
+  if (relayRoomKeyCache.has(cleanRoomId)) {
+    return relayRoomKeyCache.get(cleanRoomId);
+  }
+
+  const cachedKey = await loadWrappedRelayRoomKey(cleanRoomId).catch(() => null);
+  if (!cachedKey) {
+    return null;
+  }
+
+  relayRoomKeyCache.set(cleanRoomId, cachedKey);
+  return cachedKey;
+}
+
+async function decryptRelayPayloadWithRoomKey(roomKey, ivBase64, ciphertextBase64) {
+  const plaintext = await crypto.subtle.decrypt(
+    {
+      name: "AES-GCM",
+      iv: base64ToUint8Array(ivBase64),
+    },
+    roomKey,
+    base64ToUint8Array(ciphertextBase64)
+  );
+
+  const decoder = new TextDecoder();
+  return JSON.parse(decoder.decode(plaintext));
+}
+
 async function encryptRelayPayload(roomId, payload) {
   const cleanRoomId = normalizeRoomIdValue(roomId);
   const roomKey = await ensureRelayRoomKey(cleanRoomId);
@@ -2735,17 +2772,7 @@ async function decryptRelayPayload(roomId, ivBase64, ciphertextBase64) {
     throw new Error("room_key_required");
   }
 
-  const plaintext = await crypto.subtle.decrypt(
-    {
-      name: "AES-GCM",
-      iv: base64ToUint8Array(ivBase64),
-    },
-    roomKey,
-    base64ToUint8Array(ciphertextBase64)
-  );
-
-  const decoder = new TextDecoder();
-  return JSON.parse(decoder.decode(plaintext));
+  return decryptRelayPayloadWithRoomKey(roomKey, ivBase64, ciphertextBase64);
 }
 
 async function encryptRelayAttachmentPayload(roomId, attachment) {
@@ -3227,6 +3254,80 @@ async function handleRealtimeNotificationMessage(message, fallbackRoomId = "") {
   });
 }
 
+async function handleSavedRoomRelayEnvelopeNotification(payload = {}) {
+  if (!isRelayModeActive()) {
+    return;
+  }
+
+  const payloadRoomId = normalizeRoomIdValue(payload?.roomId);
+  const normalizedEnvelope = normalizeRelayEnvelopeShape(payload?.envelope, payloadRoomId);
+  if (!normalizedEnvelope) {
+    return;
+  }
+
+  const roomId = normalizedEnvelope.roomId;
+  if (joined && normalizeRoomIdValue(roomState?.id) === roomId) {
+    return;
+  }
+
+  const sourceId = String(payload?.sourceId || "").trim();
+  await storeRelayEnvelopeRecord(roomId, normalizedEnvelope, sourceId).catch(() => {
+    // no-op
+  });
+  relayMessageEnvelopeCache.set(normalizedEnvelope.messageId, normalizedEnvelope);
+
+  if (processedNotificationMessageIdSet.has(normalizedEnvelope.messageId)) {
+    return;
+  }
+
+  const silentKey = await getRelayRoomKeySilently(roomId).catch(() => null);
+  if (silentKey) {
+    try {
+      const decryptedPayload = await decryptRelayPayloadWithRoomKey(
+        silentKey,
+        normalizedEnvelope.iv,
+        normalizedEnvelope.ciphertext
+      );
+      const relayMessage = decryptedPayload && typeof decryptedPayload === "object"
+        ? decryptedPayload
+        : {};
+      await handleRealtimeNotificationMessage(
+        {
+          id: normalizedEnvelope.messageId,
+          roomId,
+          userId: String(relayMessage.userId || normalizedEnvelope.senderId || ""),
+          userName: String(relayMessage.userName || t("guest")).trim() || t("guest"),
+          text: String(relayMessage.text || ""),
+          createdAt: normalizedEnvelope.createdAt,
+        },
+        roomId
+      );
+      return;
+    } catch {
+      // fallback to generic relay notification
+    }
+  }
+
+  setNotificationCheckpoint(roomId, {
+    id: normalizedEnvelope.messageId,
+    createdAt: normalizedEnvelope.createdAt,
+  });
+  if (!rememberProcessedNotificationMessageId(normalizedEnvelope.messageId)) {
+    return;
+  }
+  if (!notificationsEnabled || !notificationsSavedRoomsEnabled) {
+    return;
+  }
+
+  await dispatchDesktopNotification({
+    roomId,
+    messageId: normalizedEnvelope.messageId,
+    kind: "relay-fallback",
+    title: t("notificationRelayFallbackTitle", { room: roomId }),
+    body: t("notificationRelayFallbackBody"),
+  });
+}
+
 async function processNotificationPollRoomSnapshot(roomSnapshot) {
   const roomId = normalizeRoomIdValue(roomSnapshot?.roomId);
   if (!roomId) {
@@ -3277,7 +3378,7 @@ async function processNotificationPollRoomSnapshot(roomSnapshot) {
 
 function getWatchedNotificationRoomIds() {
   trimNotificationStateToSavedRooms();
-  if (!canUseDesktopNotifications() || isRelayModeActive()) {
+  if (!canUseDesktopNotifications()) {
     return [];
   }
   return savedRooms
@@ -11212,6 +11313,13 @@ socket.on("saved-room-chat-message", ({ roomId, message } = {}) => {
     return;
   }
   void handleRealtimeNotificationMessage(message, roomId);
+});
+
+socket.on("saved-room-relay-envelope", (payload = {}) => {
+  if (!isRelayModeActive()) {
+    return;
+  }
+  void handleSavedRoomRelayEnvelopeNotification(payload);
 });
 
 socket.on("chat-message-updated", (message) => {
