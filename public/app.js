@@ -145,6 +145,9 @@ const VOLUME_GAIN_MAX = 2;
 const VOLUME_CURVE_BELOW_BASE_EXP = 1.6;
 const VOLUME_CURVE_ABOVE_BASE_EXP = 1.2;
 const PEER_DISCONNECT_GRACE_MS = 8000;
+const VOICE_RECONNECT_INITIAL_DELAY_MS = 1000;
+const VOICE_RECONNECT_MAX_DELAY_MS = 8000;
+const VOICE_RECONNECT_STATUS_DELAY_MS = 2500;
 const MIC_CAPTURE_MUTE_GRACE_MS = 320;
 const DLOLMUS_COMMAND_PREFIX = "/dlolmus";
 const RN_COMMAND_PREFIX = "/rn";
@@ -446,6 +449,7 @@ const I18N = {
     micErrorGeneric: "Microphone error: {name}",
     negotiationError: "Negotiation error",
     connectedToHost: "Connected to host",
+    voiceReconnecting: "Restoring voice connection...",
     screenShareNotSupported: "Screen sharing is not supported in this browser.",
     screenSharingStartedNoAudio: "Screen sharing started (video only; browser did not provide screen audio)",
     screenSharingStartedMicKept: "Screen sharing started (video only; microphone kept active).",
@@ -1189,6 +1193,10 @@ const relayAttachmentSourceMap = new Map();
 const relayAttachmentRequestMap = new Map();
 
 const peers = new Map();
+const peerReconnectTimerByPeerId = new Map();
+const peerReconnectStatusTimerByPeerId = new Map();
+const peerReconnectAttemptByPeerId = new Map();
+const peerReconnectStatusShownPeerIds = new Set();
 const sourceMedia = new Map();
 const trackMetaById = new Map();
 const pendingTracksById = new Map();
@@ -7610,16 +7618,6 @@ function formatVolumePercentLabel(percentValue) {
   return `${percent}%`;
 }
 
-function shouldMuteRemoteMicForScreenEchoGuard() {
-  return Boolean(localScreenTrack && localScreenAudioTrack);
-}
-
-function applyAllRemoteUserVolumes() {
-  for (const userId of remoteVoice.keys()) {
-    applyUserVolume(userId);
-  }
-}
-
 function hasScreenAudioTrack(userId) {
   const entry = remoteVoice.get(userId);
   if (!entry) {
@@ -8042,7 +8040,6 @@ function applyUserVolume(userId) {
   const targetVolume = getUserVolume(userId);
   const targetScreenAudioVolume = getScreenAudioVolume(userId);
   const screenMuted = isScreenAudioMuted(userId);
-  const remoteMicMutedByEchoGuard = shouldMuteRemoteMicForScreenEchoGuard();
 
   if (entry.gainNode && entry.tracks.size > 0) {
     entry.gainNode.gain.value = targetVolume;
@@ -8055,7 +8052,7 @@ function applyUserVolume(userId) {
 
         const nextGate = item.isScreenAudio
           ? (screenMuted ? 0 : targetScreenAudioVolume)
-          : (remoteMicMutedByEchoGuard ? 0 : 1);
+          : 1;
         if (item.justAttached) {
           const now = entry.gainNode.context.currentTime;
           item.trackGainNode.gain.cancelScheduledValues(now);
@@ -8073,7 +8070,7 @@ function applyUserVolume(userId) {
   for (const item of entry.tracks.values()) {
     const gate = item.isScreenAudio
       ? (screenMuted ? 0 : targetScreenAudioVolume)
-      : (remoteMicMutedByEchoGuard ? 0 : 1);
+      : 1;
     item.audio.volume = clamp(targetVolume * gate, 0, 1);
   }
 }
@@ -9305,6 +9302,162 @@ function syncForwardingForPeer(targetPeerId) {
   }
 }
 
+function clearPeerReconnectTimer(peerId) {
+  const timerId = peerReconnectTimerByPeerId.get(peerId);
+  if (timerId) {
+    clearTimeout(timerId);
+    peerReconnectTimerByPeerId.delete(peerId);
+  }
+}
+
+function clearPeerReconnectStatusTimer(peerId) {
+  const timerId = peerReconnectStatusTimerByPeerId.get(peerId);
+  if (timerId) {
+    clearTimeout(timerId);
+    peerReconnectStatusTimerByPeerId.delete(peerId);
+  }
+}
+
+function clearPeerReconnectState(peerId) {
+  if (!peerId) {
+    return;
+  }
+
+  clearPeerReconnectTimer(peerId);
+  clearPeerReconnectStatusTimer(peerId);
+  peerReconnectAttemptByPeerId.delete(peerId);
+  peerReconnectStatusShownPeerIds.delete(peerId);
+}
+
+function clearAllPeerReconnectState() {
+  for (const peerId of Array.from(peerReconnectTimerByPeerId.keys())) {
+    clearPeerReconnectTimer(peerId);
+  }
+
+  for (const peerId of Array.from(peerReconnectStatusTimerByPeerId.keys())) {
+    clearPeerReconnectStatusTimer(peerId);
+  }
+
+  peerReconnectAttemptByPeerId.clear();
+  peerReconnectStatusShownPeerIds.clear();
+}
+
+function isPeerConnectionConnected(peerId) {
+  return peers.get(peerId)?.pc?.connectionState === "connected";
+}
+
+function shouldReconnectPeer(peerId) {
+  const cleanPeerId = String(peerId || "").trim();
+  if (!cleanPeerId || !joined || !selfId || !roomState || !isInVoiceChannel(roomState)) {
+    return false;
+  }
+
+  const voiceMembers = getVoiceMembersFromRoom(roomState);
+  const voiceMemberIds = new Set(voiceMembers.map((member) => String(member?.id || "").trim()).filter(Boolean));
+  if (!voiceMemberIds.has(selfId)) {
+    return false;
+  }
+
+  if (isHost) {
+    return cleanPeerId !== selfId && voiceMemberIds.has(cleanPeerId);
+  }
+
+  const hostId = String(roomState?.hostId || "").trim();
+  return Boolean(hostId && hostId === cleanPeerId && hostId !== selfId);
+}
+
+function queueVoiceReconnectStatus(peerId) {
+  if (isHost || !peerId || peerReconnectStatusShownPeerIds.has(peerId)) {
+    return;
+  }
+
+  if (peerReconnectStatusTimerByPeerId.has(peerId)) {
+    return;
+  }
+
+  const timerId = setTimeout(() => {
+    peerReconnectStatusTimerByPeerId.delete(peerId);
+    if (!isHost && shouldReconnectPeer(peerId) && !isPeerConnectionConnected(peerId)) {
+      peerReconnectStatusShownPeerIds.add(peerId);
+      setStatus(t("voiceReconnecting"));
+    }
+  }, VOICE_RECONNECT_STATUS_DELAY_MS);
+
+  peerReconnectStatusTimerByPeerId.set(peerId, timerId);
+}
+
+function emitVoicePeerReconnectRequest(peerId, reason = "") {
+  const cleanPeerId = String(peerId || "").trim();
+  if (!cleanPeerId || isHost || !shouldReconnectPeer(cleanPeerId)) {
+    return;
+  }
+
+  socket.emit("signal", {
+    to: cleanPeerId,
+    payload: {
+      type: "voice-peer-reconnect-request",
+      reason: String(reason || "").trim().slice(0, 64),
+    },
+  });
+}
+
+function schedulePeerReconnect(peerId, options = {}) {
+  const cleanPeerId = String(peerId || "").trim();
+  if (!cleanPeerId) {
+    return;
+  }
+
+  if (!shouldReconnectPeer(cleanPeerId)) {
+    clearPeerReconnectState(cleanPeerId);
+    return;
+  }
+
+  if (isPeerConnectionConnected(cleanPeerId)) {
+    clearPeerReconnectState(cleanPeerId);
+    return;
+  }
+
+  queueVoiceReconnectStatus(cleanPeerId);
+  if (peerReconnectTimerByPeerId.has(cleanPeerId)) {
+    return;
+  }
+
+  const attempt = peerReconnectAttemptByPeerId.get(cleanPeerId) || 0;
+  const delay =
+    options.immediate && attempt === 0
+      ? 0
+      : Math.min(
+          VOICE_RECONNECT_INITIAL_DELAY_MS * Math.pow(2, Math.max(0, attempt)),
+          VOICE_RECONNECT_MAX_DELAY_MS
+        );
+
+  const timerId = setTimeout(() => {
+    peerReconnectTimerByPeerId.delete(cleanPeerId);
+
+    if (!shouldReconnectPeer(cleanPeerId) || isPeerConnectionConnected(cleanPeerId)) {
+      clearPeerReconnectState(cleanPeerId);
+      return;
+    }
+
+    peerReconnectAttemptByPeerId.set(cleanPeerId, attempt + 1);
+    if (isHost) {
+      offerPeer(cleanPeerId, {
+        forceIceRestart: true,
+      });
+    } else {
+      emitVoicePeerReconnectRequest(cleanPeerId, options.reason || "recover");
+    }
+
+    if (shouldReconnectPeer(cleanPeerId) && !isPeerConnectionConnected(cleanPeerId)) {
+      schedulePeerReconnect(cleanPeerId, {
+        reason: options.reason || "retry",
+      });
+    }
+  }, delay);
+
+  peerReconnectTimerByPeerId.set(cleanPeerId, timerId);
+}
+
 function createPeerConnection(peerId) {
   const pc = new RTCPeerConnection(rtcConfig);
 
@@ -9313,6 +9466,7 @@ function createPeerConnection(peerId) {
     makingOffer: false,
     offerQueued: false,
     needsOffer: false,
+    needsIceRestart: false,
     disconnectTimer: null,
     forwardedSenders: new Map(),
     micSender: null,
@@ -9342,6 +9496,7 @@ function createPeerConnection(peerId) {
     const state = pc.connectionState;
 
     if (state === "connected") {
+      clearPeerReconnectState(peerId);
       if (entry.disconnectTimer) {
         clearTimeout(entry.disconnectTimer);
         entry.disconnectTimer = null;
@@ -9350,6 +9505,9 @@ function createPeerConnection(peerId) {
     }
 
     if (state === "disconnected") {
+      schedulePeerReconnect(peerId, {
+        reason: "disconnected",
+      });
       if (!entry.disconnectTimer) {
         entry.disconnectTimer = setTimeout(() => {
           entry.disconnectTimer = null;
@@ -9358,6 +9516,9 @@ function createPeerConnection(peerId) {
             return;
           }
           closePeer(peerId);
+          schedulePeerReconnect(peerId, {
+            reason: "disconnect-timeout",
+          });
         }, PEER_DISCONNECT_GRACE_MS);
       }
       return;
@@ -9368,7 +9529,16 @@ function createPeerConnection(peerId) {
       entry.disconnectTimer = null;
     }
 
-    if (state === "failed" || state === "closed") {
+    if (state === "failed") {
+      schedulePeerReconnect(peerId, {
+        reason: "failed",
+        immediate: true,
+      });
+      closePeer(peerId);
+      return;
+    }
+
+    if (state === "closed") {
       closePeer(peerId);
     }
   };
@@ -9506,8 +9676,11 @@ async function makeOffer(peerId) {
 
   try {
     applyPreferredAudioCodecsToPeerConnection(entry.pc);
-    const offer = await entry.pc.createOffer();
+    const offer = entry.needsIceRestart
+      ? await entry.pc.createOffer({ iceRestart: true })
+      : await entry.pc.createOffer();
     await entry.pc.setLocalDescription(offer);
+    entry.needsIceRestart = false;
 
     socket.emit("signal", {
       to: peerId,
@@ -9535,13 +9708,19 @@ async function makeOffer(peerId) {
   }
 }
 
-function offerPeer(peerId) {
+function offerPeer(peerId, options = {}) {
   if (!joined || !isHost || peerId === selfId) {
     return;
   }
 
-  if (!peers.has(peerId)) {
+  let entry = peers.get(peerId) || null;
+  if (!entry) {
     createPeerConnection(peerId);
+    entry = peers.get(peerId) || null;
+  }
+
+  if (entry && options.forceIceRestart) {
+    entry.needsIceRestart = true;
   }
 
   syncForwardingForPeer(peerId);
@@ -10076,7 +10255,6 @@ async function startScreenShare() {
     localScreenLastPublishHostId = null;
     localScreenLastPublishedAudioTrackId = null;
     localScreenLikelySelfCapture = likelySelfCapture;
-    applyAllRemoteUserVolumes();
     attachLocalScreenPreview(videoTrack);
 
     videoTrack.onended = () => {
@@ -10140,7 +10318,6 @@ async function startScreenShare() {
     localScreenLastPublishedAudioTrackId = null;
     localScreenLikelySelfCapture = false;
     unregisterScreenSenderAbrByPrefix("member-upstream:");
-    applyAllRemoteUserVolumes();
     removeLocalScreenPreview();
     updateScreenButton();
   } finally {
@@ -10170,7 +10347,6 @@ async function stopScreenShare(fromEnded = false) {
   localScreenStream = null;
   localScreenPublishPending = false;
   localScreenLikelySelfCapture = false;
-  applyAllRemoteUserVolumes();
   removeLocalScreenPreview();
 
   if (activeVideoTrack) {
@@ -10254,6 +10430,7 @@ async function becomeHost() {
     return;
   }
 
+  clearAllPeerReconnectState();
   if (isHost) {
     unregisterScreenSenderAbrByPrefix("member-upstream:");
     const outboundMicTrack = getOutboundMicTrack();
@@ -10320,6 +10497,7 @@ async function becomeHost() {
 }
 
 function becomeMember(nextHostId) {
+  clearAllPeerReconnectState();
   sourceMedia.clear();
   screenAudioTrackIdsBySource.clear();
   unregisterScreenSenderAbrByPrefix("host-forward:");
@@ -10339,12 +10517,17 @@ function becomeMember(nextHostId) {
 
   if (nextHostId) {
     setStatus(t("waitingForHost"));
+    schedulePeerReconnect(nextHostId, {
+      reason: "waiting-for-host",
+      immediate: true,
+    });
   } else {
     setStatus(t("inVoiceRoom"));
   }
 }
 
 function becomeServerOnly() {
+  clearAllPeerReconnectState();
   sourceMedia.clear();
   screenAudioTrackIdsBySource.clear();
   unregisterScreenSenderAbrByPrefix("host-forward:");
@@ -10367,6 +10550,7 @@ function becomeServerOnly() {
 function resetSessionState() {
   clearMicMuteTimer();
   closeScreenPickerDialogWithResult(null);
+  clearAllPeerReconnectState();
 
   for (const peerId of Array.from(peers.keys())) {
     closePeer(peerId, true);
@@ -11416,6 +11600,7 @@ socket.on("room-state", async (room) => {
 
     for (const peerId of Array.from(peers.keys())) {
       if (!memberIds.has(peerId)) {
+        clearPeerReconnectState(peerId);
         closePeer(peerId);
       }
     }
@@ -11463,6 +11648,7 @@ socket.on("peer-join-request", ({ peerId }) => {
 });
 
 socket.on("peer-left", ({ peerId }) => {
+  clearPeerReconnectState(peerId);
   closePeer(peerId);
   clearTrackMappingsForSource(peerId);
   removeVoiceTrack(peerId);
@@ -11624,6 +11810,15 @@ socket.on("signal", async ({ from, payload }) => {
 
     if (payload.type === "remove-forwarded-track") {
       handleRemoveForwardedTrack(payload);
+      return;
+    }
+
+    if (payload.type === "voice-peer-reconnect-request" && isHost) {
+      if (shouldReconnectPeer(from)) {
+        offerPeer(from, {
+          forceIceRestart: true,
+        });
+      }
       return;
     }
 
