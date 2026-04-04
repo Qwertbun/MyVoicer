@@ -4963,6 +4963,24 @@ function normalizeIncomingChatAttachment(attachment, index) {
   const normalizedSize = Number.isFinite(size) && size > 0 ? Math.round(size) : 0;
   const url = String(attachment.url || "").trim();
   const encrypted = Boolean(attachment.encrypted);
+  const transportRaw = String(attachment.transport || "").trim().toLowerCase();
+  const chunkSize = Number(attachment.chunkSize);
+  const totalChunks = Number(attachment.totalChunks);
+  const normalizedChunkSize = Number.isFinite(chunkSize) && chunkSize > 0 ? Math.round(chunkSize) : 0;
+  const normalizedTotalChunks = Number.isFinite(totalChunks) && totalChunks > 0
+    ? Math.round(totalChunks)
+    : 0;
+  const transport = (
+    encrypted
+    && transportRaw === RELAY_ATTACHMENT_TRANSPORT_S3_V2
+    && String(attachment.objectKey || "").trim()
+    && String(attachment.fileKey || "").trim()
+    && String(attachment.noncePrefix || "").trim()
+    && normalizedChunkSize > 0
+    && normalizedTotalChunks > 0
+  )
+    ? RELAY_ATTACHMENT_TRANSPORT_S3_V2
+    : "";
   if (!encrypted && (!url || !(url.startsWith("/") || /^https?:\/\//i.test(url)))) {
     return null;
   }
@@ -4974,9 +4992,21 @@ function normalizeIncomingChatAttachment(attachment, index) {
     name,
     mimeType,
     size: normalizedSize,
-    url: encrypted ? url : url,
+    url,
     previewKind: getChatAttachmentPreviewKind(mimeType),
     encrypted,
+    transport,
+    objectKey: transport === RELAY_ATTACHMENT_TRANSPORT_S3_V2
+      ? String(attachment.objectKey || "").trim().slice(0, 512)
+      : "",
+    fileKey: transport === RELAY_ATTACHMENT_TRANSPORT_S3_V2
+      ? String(attachment.fileKey || "").trim().slice(0, 256)
+      : "",
+    noncePrefix: transport === RELAY_ATTACHMENT_TRANSPORT_S3_V2
+      ? String(attachment.noncePrefix || "").trim().slice(0, 64)
+      : "",
+    chunkSize: transport === RELAY_ATTACHMENT_TRANSPORT_S3_V2 ? normalizedChunkSize : 0,
+    totalChunks: transport === RELAY_ATTACHMENT_TRANSPORT_S3_V2 ? normalizedTotalChunks : 0,
   };
 }
 
