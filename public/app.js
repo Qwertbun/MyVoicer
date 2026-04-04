@@ -1245,6 +1245,21 @@ function setStatus(text) {
   if (statusEl) {
     statusEl.textContent = text;
   }
+  try {
+    const normalizedText = String(text || "").trim();
+    const attachmentUnavailableText = String(t("attachmentSourceUnavailable") || "").trim();
+    if (normalizedText && attachmentUnavailableText && normalizedText === attachmentUnavailableText) {
+      console.error("status_attachment_source_unavailable", {
+        roomId: normalizeRoomIdValue(roomState?.id),
+        networkMode: activeBackendNetworkMode || NETWORK_MODE_ID,
+        relayUploadProvider,
+        socketConnected: Boolean(socket?.connected),
+        timestamp: new Date().toISOString(),
+      });
+    }
+  } catch {
+    // no-op
+  }
   updateWindowChromeMeta(text);
 }
 
