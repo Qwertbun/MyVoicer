@@ -2045,17 +2045,19 @@ io.on("connection", (socket) => {
       }
 
       if (Array.isArray(sanitizedEnvelope.attachmentRefs) && sanitizedEnvelope.attachmentRefs.length > 0) {
+        const refs = sanitizedEnvelope.attachmentRefs.map((item) => ({
+          attachmentId: item.attachmentId,
+          transport: item.transport || "",
+          hasObjectKey: Boolean(String(item.objectKey || "").trim()),
+        }));
         console.info("relay_chat_attachment_refs_server", {
           roomId,
           messageId: sanitizedEnvelope.messageId,
           senderSocketId: socket.id,
           senderRelayId: relaySenderId,
           transportVersion: sanitizedEnvelope.transportVersion,
-          refs: sanitizedEnvelope.attachmentRefs.map((item) => ({
-            attachmentId: item.attachmentId,
-            transport: item.transport || "",
-            hasObjectKey: Boolean(String(item.objectKey || "").trim()),
-          })),
+          refs,
+          refsSummary: refs.map((item) => `${item.attachmentId}:${item.transport || "legacy"}:${item.hasObjectKey ? "ok" : "no-key"}`),
         });
       }
 

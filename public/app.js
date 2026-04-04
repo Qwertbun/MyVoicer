@@ -5229,17 +5229,19 @@ async function handleRelayChatPacket(packet, { fromReplay = false } = {}) {
   }
 
   if (Array.isArray(normalizedEnvelope.attachmentRefs) && normalizedEnvelope.attachmentRefs.length > 0) {
+    const refs = normalizedEnvelope.attachmentRefs.map((item) => ({
+      attachmentId: item.attachmentId,
+      transport: item.transport || "",
+      hasObjectKey: Boolean(String(item.objectKey || "").trim()),
+    }));
     console.info("relay_chat_attachment_refs_incoming", {
       roomId: normalizedEnvelope.roomId,
       messageId: normalizedEnvelope.messageId,
       sourceId: String(packet?.sourceId || "").trim(),
       fromReplay: Boolean(fromReplay),
       transportVersion: Number(normalizedEnvelope.transportVersion) || 1,
-      refs: normalizedEnvelope.attachmentRefs.map((item) => ({
-        attachmentId: item.attachmentId,
-        transport: item.transport || "",
-        hasObjectKey: Boolean(String(item.objectKey || "").trim()),
-      })),
+      refs,
+      refsSummary: refs.map((item) => `${item.attachmentId}:${item.transport || "legacy"}:${item.hasObjectKey ? "ok" : "no-key"}`),
     });
   }
 
@@ -6315,7 +6317,15 @@ function createChatAttachmentElement(attachment, messageId = "", roomId = "") {
     button.dataset.transport = isRelayV2Attachment ? RELAY_ATTACHMENT_TRANSPORT_S3_V2 : "legacy";
     button.dataset.attachmentId = String(attachment?.id || "").trim();
     button.dataset.messageId = String(messageId || attachment?.messageId || "").trim();
+    if (!isRelayV2Attachment) {
+      button.disabled = true;
+      button.title = t("legacyRelayAttachmentUnsupported");
+    }
     button.addEventListener("click", () => {
+      if (!isRelayV2Attachment) {
+        reportLegacyRelayAttachmentUnsupported(attachment, roomId);
+        return;
+      }
       const attachmentRoomId = normalizeRoomIdValue(attachment.roomId || roomId || roomState?.id);
       const attachmentMessageId = String(messageId || attachment.messageId || "").trim();
       console.info("attachment_download_click", {
@@ -6327,14 +6337,10 @@ function createChatAttachmentElement(attachment, messageId = "", roomId = "") {
         hasFileKey: Boolean(String(attachment?.fileKey || "").trim()),
         hasNoncePrefix: Boolean(String(attachment?.noncePrefix || "").trim()),
       });
-      if (isRelayV2Attachment) {
-        void downloadRelayV2Attachment(
-          attachment,
-          attachmentRoomId
-        );
-      } else {
-        reportLegacyRelayAttachmentUnsupported(attachment, attachmentRoomId);
-      }
+      void downloadRelayV2Attachment(
+        attachment,
+        attachmentRoomId
+      );
     });
     wrapper.appendChild(button);
 
@@ -6707,15 +6713,17 @@ async function buildRelayEncryptedChatPacket(roomId, text) {
   });
 
   if (attachmentRefs.length > 0) {
+    const refs = attachmentRefs.map((item) => ({
+      attachmentId: item.attachmentId,
+      transport: item.transport,
+      hasObjectKey: Boolean(String(item.objectKey || "").trim()),
+    }));
     console.info("relay_chat_attachment_refs_outgoing", {
       roomId: cleanRoomId,
       messageId,
       transportVersion: 2,
-      refs: attachmentRefs.map((item) => ({
-        attachmentId: item.attachmentId,
-        transport: item.transport,
-        hasObjectKey: Boolean(String(item.objectKey || "").trim()),
-      })),
+      refs,
+      refsSummary: refs.map((item) => `${item.attachmentId}:${item.transport || "legacy"}:${item.hasObjectKey ? "ok" : "no-key"}`),
     });
   }
 
