@@ -1891,20 +1891,37 @@ io.on("connection", (socket) => {
     if (!room || !room.members.has(socket.id)) {
       return;
     }
-    if (!room.members.has(cleanTargetId) || !isLocalSocketMember(cleanTargetId)) {
-      const cachedPayload = getRelayLegacyAttachmentPayload(cleanRoomId, cleanAttachmentRef);
-      if (cachedPayload) {
-        const served = emitRelayAttachmentPayloadFromServer({
+
+    const cachedPayload = getRelayLegacyAttachmentPayload(cleanRoomId, cleanAttachmentRef);
+    if (cachedPayload) {
+      const served = emitRelayAttachmentPayloadFromServer({
+        roomId: cleanRoomId,
+        requestId: cleanRequestId,
+        targetId: socket.id,
+        attachmentRef: cleanAttachmentRef,
+        payload: cachedPayload,
+      });
+      if (served) {
+        console.info("relay_legacy_attachment_cache_hit", {
           roomId: cleanRoomId,
           requestId: cleanRequestId,
-          targetId: socket.id,
-          attachmentRef: cleanAttachmentRef,
-          payload: cachedPayload,
+          messageId: cleanAttachmentRef.messageId,
+          attachmentId: cleanAttachmentRef.attachmentId,
+          requesterId: socket.id,
         });
-        if (served) {
-          return;
-        }
+        return;
       }
+    }
+
+    if (!room.members.has(cleanTargetId) || !isLocalSocketMember(cleanTargetId)) {
+      console.warn("relay_attachment_request_target_unavailable", {
+        roomId: cleanRoomId,
+        requestId: cleanRequestId,
+        messageId: cleanAttachmentRef.messageId,
+        attachmentId: cleanAttachmentRef.attachmentId,
+        requesterId: socket.id,
+        targetId: cleanTargetId,
+      });
       io.to(socket.id).emit("relay-attachment-response", {
         roomId: cleanRoomId,
         requestId: cleanRequestId,
@@ -1968,9 +1985,27 @@ io.on("connection", (socket) => {
             payload: cachedPayload,
           });
           if (served) {
+            console.info("relay_legacy_attachment_cache_recovered_from_peer_error", {
+              roomId: cleanRoomId,
+              requestId: cleanRequestId,
+              messageId: cleanAttachmentRef.messageId,
+              attachmentId: cleanAttachmentRef.attachmentId,
+              targetId: cleanTargetId,
+              sourceId: socket.id,
+              peerError: cleanError,
+            });
             return;
           }
         }
+        console.warn("relay_legacy_attachment_cache_miss_on_peer_error", {
+          roomId: cleanRoomId,
+          requestId: cleanRequestId,
+          messageId: cleanAttachmentRef.messageId,
+          attachmentId: cleanAttachmentRef.attachmentId,
+          targetId: cleanTargetId,
+          sourceId: socket.id,
+          peerError: cleanError,
+        });
       }
 
       if (sanitizedChunk && estimatePayloadBytes(sanitizedChunk) > RELAY_MAX_ATTACHMENT_CHUNK_BYTES) {
