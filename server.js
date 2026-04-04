@@ -4,6 +4,11 @@ const express = require("express");
 const http = require("http");
 const https = require("https");
 const { Server } = require("socket.io");
+const {
+  createRelayUploadsManager,
+  RELAY_V2_MAX_FILE_BYTES,
+  RELAY_V2_MAX_TOTAL_MESSAGE_BYTES,
+} = require("./relay_uploads");
 
 const app = express();
 const rooms = new Map();
@@ -11,7 +16,7 @@ const MAX_CHAT_MESSAGES = 150;
 const MAX_CHAT_MESSAGE_LENGTH = 1200;
 const MAX_CHAT_ATTACHMENTS = 4;
 const CHAT_EDIT_WINDOW_MS = 365 * 24 * 60 * 60 * 1000;
-const SOCKET_MAX_HTTP_BUFFER_SIZE = 1024 * 1024 * 1024;
+const SOCKET_MAX_HTTP_BUFFER_SIZE = 16 * 1024 * 1024;
 const PUBLIC_ROOT = path.join(__dirname, "public");
 const CHAT_UPLOADS_ROOT = process.env.CHAT_UPLOADS_ROOT
   ? path.resolve(String(process.env.CHAT_UPLOADS_ROOT))
@@ -43,6 +48,7 @@ const RELAY_MAX_ENVELOPE_CIPHERTEXT_BYTES = 2 * 1024 * 1024;
 const RELAY_MAX_ATTACHMENT_PAYLOAD_CIPHERTEXT_BYTES = SOCKET_MAX_HTTP_BUFFER_SIZE;
 const RELAY_MAX_ATTACHMENT_CHUNK_TEXT_BYTES = 12 * 1024 * 1024;
 const RELAY_INLINE_ATTACHMENT_BROADCAST_MAX_BYTES = 2 * 1024 * 1024;
+const RELAY_ATTACHMENT_TRANSPORT_S3_V2 = "s3-v2";
 const CHAT_MIME_EXTENSION_FALLBACKS = Object.freeze({
   "image/jpeg": "jpg",
   "image/png": "png",
@@ -64,6 +70,7 @@ let chatStateSaveTimer = null;
 let chatStateSaveChain = Promise.resolve();
 let p2pMesh = null;
 let createP2PMesh = null;
+let relayUploadsManager = null;
 
 app.use(express.json({ limit: "256kb" }));
 app.use(express.static(PUBLIC_ROOT));
@@ -181,6 +188,12 @@ app.get("/api/network-mode", (req, res) => {
     relay: RELAY_MODE_ENABLED,
     p2p: P2P_MODE_ENABLED,
     server: NETWORK_MODE === NETWORK_MODE_SERVER,
+    relayUploads: RELAY_MODE_ENABLED && relayUploadsManager
+      ? {
+          provider: relayUploadsManager.provider,
+          limits: relayUploadsManager.limits,
+        }
+      : null,
   });
 });
 
@@ -1336,16 +1349,30 @@ function sanitizeRelayAttachmentRef(value = {}) {
   const name = normalizeRelayString(value.name, 120);
   const mimeType = normalizeChatAttachmentMimeType(value.mimeType);
   const size = Number(value.size);
+  const transport = normalizeRelayString(value.transport, 24).toLowerCase();
+  const objectKey = normalizeRelayString(value.objectKey, 512);
   if (!messageId || !attachmentId) {
+    return null;
+  }
+  const normalizedSize = Number.isFinite(size) && size >= 0 ? Math.round(size) : 0;
+  if (normalizedSize > RELAY_V2_MAX_FILE_BYTES) {
+    return null;
+  }
+
+  if (transport === RELAY_ATTACHMENT_TRANSPORT_S3_V2 && !objectKey) {
     return null;
   }
 
   return {
     messageId,
     attachmentId,
+    transport: transport === RELAY_ATTACHMENT_TRANSPORT_S3_V2
+      ? RELAY_ATTACHMENT_TRANSPORT_S3_V2
+      : "",
+    objectKey: transport === RELAY_ATTACHMENT_TRANSPORT_S3_V2 ? objectKey : "",
     name: name || "file",
     mimeType,
-    size: Number.isFinite(size) && size >= 0 ? Math.round(size) : 0,
+    size: normalizedSize,
   };
 }
 
@@ -1361,6 +1388,8 @@ function sanitizeRelayEnvelope(value = {}) {
   const v = Number(value.v);
   const alg = normalizeRelayString(value.alg, 24);
   const iv = normalizeRelayString(value.iv, 128);
+  const transportVersionRaw = Number(value.transportVersion);
+  const transportVersion = transportVersionRaw === 2 ? 2 : 1;
   const ciphertext = normalizeRelayCiphertext(
     value.ciphertext,
     RELAY_MAX_ENVELOPE_CIPHERTEXT_BYTES
@@ -1385,10 +1414,27 @@ function sanitizeRelayEnvelope(value = {}) {
         .filter(Boolean)
         .slice(0, MAX_CHAT_ATTACHMENTS)
     : [];
+  const roomStoragePrefix = `relay-v2/${normalizeChatStorageRoomId(roomId)}/`;
+  const hasInvalidV2Ref = attachmentRefs.some(
+    (item) =>
+      item?.transport === RELAY_ATTACHMENT_TRANSPORT_S3_V2
+      && (!item.objectKey || !String(item.objectKey).startsWith(roomStoragePrefix))
+  );
+  if (hasInvalidV2Ref) {
+    return null;
+  }
+  const totalAttachmentSize = attachmentRefs.reduce(
+    (acc, item) => acc + (Number(item?.size) || 0),
+    0
+  );
+  if (totalAttachmentSize > RELAY_V2_MAX_TOTAL_MESSAGE_BYTES) {
+    return null;
+  }
 
   return {
     v,
     alg,
+    transportVersion,
     roomId,
     messageId,
     senderId,
@@ -1496,12 +1542,75 @@ if (P2P_MODE_ENABLED) {
   console.log(`[network] mode=${NETWORK_MODE}, peer discovery via Hyperswarm enabled`);
 }
 
+relayUploadsManager = createRelayUploadsManager({
+  app,
+  io,
+  rooms,
+  relayModeEnabled: RELAY_MODE_ENABLED,
+  normalizeRoomIdValue,
+  normalizeChatStorageRoomId,
+});
+
 io.on("connection", (socket) => {
   socket.data.roomId = null;
   socket.data.userName = "Guest";
   socket.data.voiceChannelId = null;
   socket.data.chatAuthorId = socket.id;
   socket.data.watchedRoomIds = new Set();
+
+  socket.on("relay-capability-request", ({ roomId } = {}, callback) => {
+    if (!RELAY_MODE_ENABLED || !relayUploadsManager) {
+      const response = {
+        ok: false,
+        error: "relay_mode_required",
+      };
+      sendAck(callback, response);
+      return;
+    }
+
+    const cleanRoomId = normalizeRelayRoomId(roomId || socket.data.roomId);
+    if (!cleanRoomId || socket.data.roomId !== cleanRoomId) {
+      const response = {
+        ok: false,
+        error: "join_server_first",
+      };
+      sendAck(callback, response);
+      return;
+    }
+
+    const room = rooms.get(cleanRoomId);
+    if (!room || !room.members.has(socket.id)) {
+      const response = {
+        ok: false,
+        error: "join_server_first",
+      };
+      sendAck(callback, response);
+      return;
+    }
+
+    const issued = relayUploadsManager.issueCapabilityToken({
+      roomId: cleanRoomId,
+      socketId: socket.id,
+      authorId: socket.data.chatAuthorId || socket.id,
+    });
+    if (!issued?.token) {
+      const response = {
+        ok: false,
+        error: "capability_issue_failed",
+      };
+      sendAck(callback, response);
+      return;
+    }
+
+    const response = {
+      ok: true,
+      roomId: cleanRoomId,
+      token: issued.token,
+      expiresAt: issued.expiresAt,
+    };
+    socket.emit("relay-capability-response", response);
+    sendAck(callback, response);
+  });
 
   socket.on("watch-saved-rooms", ({ roomIds } = {}) => {
     replaceWatchedRoomsForSocket(socket, roomIds);
@@ -1782,12 +1891,18 @@ io.on("connection", (socket) => {
             .filter(Boolean)
             .slice(0, MAX_CHAT_ATTACHMENTS)
         : [];
+      const hasV2AttachmentRefs = Array.isArray(sanitizedEnvelope.attachmentRefs)
+        && sanitizedEnvelope.attachmentRefs.some(
+          (item) => item?.transport === RELAY_ATTACHMENT_TRANSPORT_S3_V2
+        );
       const allowedAttachmentIds = new Set(
         Array.isArray(sanitizedEnvelope.attachmentRefs)
           ? sanitizedEnvelope.attachmentRefs.map((item) => item.attachmentId)
           : []
       );
-      const alignedAttachmentPayloads = sanitizedAttachmentPayloads.filter((item) => {
+      const alignedAttachmentPayloads = hasV2AttachmentRefs
+        ? []
+        : sanitizedAttachmentPayloads.filter((item) => {
         if (item.messageId !== sanitizedEnvelope.messageId) {
           return false;
         }

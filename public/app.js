@@ -197,16 +197,21 @@ const RELAY_CRYPTO_ALGORITHM = "AES-GCM-256";
 const RELAY_CIPHER_VERSION = 1;
 const RELAY_KDF_ITERATIONS = 250000;
 const RELAY_KDF_HASH = "SHA-256";
+const RELAY_ATTACHMENT_TRANSPORT_S3_V2 = "s3-v2";
 const RELAY_HISTORY_REPLAY_LIMIT = 500;
 const RELAY_HISTORY_REPLAY_MAX_BYTES = 64 * 1024 * 1024;
 const RELAY_ATTACHMENT_CHUNK_SIZE = 256 * 1024;
 const RELAY_ATTACHMENT_REQUEST_TIMEOUT_MS = 30000;
 const RELAY_INLINE_ATTACHMENT_EMIT_MAX_BYTES = 2 * 1024 * 1024;
+const RELAY_V2_UPLOAD_CHUNK_SIZE_BYTES = 16 * 1024 * 1024;
+const RELAY_V2_MAX_FILE_BYTES = 10 * 1024 * 1024 * 1024;
+const RELAY_V2_MAX_TOTAL_MESSAGE_BYTES = 10 * 1024 * 1024 * 1024;
 const RELAY_IDB_NAME = "qwerbentum_relay_v1";
-const RELAY_IDB_VERSION = 1;
+const RELAY_IDB_VERSION = 2;
 const RELAY_STORE_MESSAGES = "cipher_messages";
 const RELAY_STORE_ATTACHMENTS = "cipher_attachments";
 const RELAY_STORE_KEYS = "room_keys_meta";
+const RELAY_STORE_UPLOADS = "upload_sessions";
 const RELAY_WRAPPING_KEY_META_ID = "wrapping-key";
 const SUPPORTED_SLAVIC_LANGUAGE_PREFIXES = [
   "sl",
@@ -1191,6 +1196,15 @@ const relayRoomKeyCache = new Map();
 const relayMessageEnvelopeCache = new Map();
 const relayAttachmentSourceMap = new Map();
 const relayAttachmentRequestMap = new Map();
+let relayCapabilityToken = "";
+let relayCapabilityTokenExpiresAt = 0;
+let relayCapabilityRoomId = "";
+let relayUploadProvider = "memory";
+let relayUploadLimits = {
+  maxFileBytes: RELAY_V2_MAX_FILE_BYTES,
+  maxTotalMessageBytes: RELAY_V2_MAX_TOTAL_MESSAGE_BYTES,
+  chunkSizeBytes: RELAY_V2_UPLOAD_CHUNK_SIZE_BYTES,
+};
 
 const peers = new Map();
 const peerReconnectTimerByPeerId = new Map();
@@ -2243,6 +2257,8 @@ function normalizeRelayEnvelopeShape(envelope, fallbackRoomId = "") {
   const createdAt = Number(envelope.createdAt);
   const alg = String(envelope.alg || "").trim();
   const v = Number(envelope.v);
+  const transportVersionRaw = Number(envelope.transportVersion);
+  const transportVersion = transportVersionRaw === 2 ? 2 : 1;
 
   if (!roomId || !messageId || !senderId || !iv || !ciphertext) {
     return null;
@@ -2259,11 +2275,23 @@ function normalizeRelayEnvelopeShape(envelope, fallbackRoomId = "") {
         .map((item) => ({
           messageId: String(item?.messageId || "").trim().slice(0, 96),
           attachmentId: String(item?.attachmentId || "").trim().slice(0, 96),
+          transport: String(item?.transport || "").trim().toLowerCase() === RELAY_ATTACHMENT_TRANSPORT_S3_V2
+            ? RELAY_ATTACHMENT_TRANSPORT_S3_V2
+            : "",
+          objectKey: String(item?.objectKey || "").trim().slice(0, 512),
           name: String(item?.name || "").trim().slice(0, 120),
           mimeType: normalizeChatAttachmentMimeType(item?.mimeType),
           size: Number.isFinite(Number(item?.size)) ? Math.max(0, Math.round(Number(item.size))) : 0,
         }))
-        .filter((item) => item.messageId && item.attachmentId)
+        .filter((item) => {
+          if (!item.messageId || !item.attachmentId) {
+            return false;
+          }
+          if (item.transport === RELAY_ATTACHMENT_TRANSPORT_S3_V2 && !item.objectKey) {
+            return false;
+          }
+          return true;
+        })
         .slice(0, MAX_CHAT_ATTACHMENTS)
     : [];
 
@@ -2273,6 +2301,7 @@ function normalizeRelayEnvelopeShape(envelope, fallbackRoomId = "") {
     roomId,
     messageId,
     senderId,
+    transportVersion,
     createdAt: Math.round(createdAt),
     iv,
     ciphertext,
@@ -2372,6 +2401,11 @@ function openRelayDatabase() {
       if (!db.objectStoreNames.contains(RELAY_STORE_KEYS)) {
         db.createObjectStore(RELAY_STORE_KEYS, { keyPath: "key" });
       }
+
+      if (!db.objectStoreNames.contains(RELAY_STORE_UPLOADS)) {
+        const store = db.createObjectStore(RELAY_STORE_UPLOADS, { keyPath: "pk" });
+        store.createIndex("roomId", "roomId", { unique: false });
+      }
     };
     request.onsuccess = () => {
       resolve(request.result);
@@ -2420,6 +2454,100 @@ function relayMessagePk(roomId, messageId) {
 
 function relayAttachmentPk(roomId, attachmentId) {
   return `${roomId}::${attachmentId}`;
+}
+
+function relayUploadSessionPk(roomId, fileFingerprint) {
+  return `${roomId}::${fileFingerprint}`;
+}
+
+function buildRelayUploadFileFingerprint(attachment) {
+  const name = String(attachment?.name || "").trim().slice(0, 180);
+  const size = Number(attachment?.size) || 0;
+  const lastModified = Number(attachment?.file?.lastModified || attachment?.lastModified || 0);
+  return `${name}::${size}::${Math.round(lastModified)}`;
+}
+
+function normalizeRelayUploadSessionEntry(entry = {}) {
+  const roomId = normalizeRoomIdValue(entry.roomId);
+  const fileFingerprint = String(entry.fileFingerprint || "").trim().slice(0, 512);
+  const sessionId = String(entry.sessionId || "").trim().slice(0, 96);
+  const uploadId = String(entry.uploadId || "").trim().slice(0, 256);
+  const objectKey = String(entry.objectKey || "").trim().slice(0, 512);
+  const fileKey = String(entry.fileKey || "").trim().slice(0, 256);
+  const noncePrefix = String(entry.noncePrefix || "").trim().slice(0, 64);
+  const messageId = String(entry.messageId || "").trim().slice(0, 96);
+  const attachmentId = String(entry.attachmentId || "").trim().slice(0, 96);
+  const chunkSize = Number(entry.chunkSize);
+  const size = Number(entry.size);
+  const totalChunks = Number(entry.totalChunks);
+  const updatedAt = Number(entry.updatedAt);
+  if (
+    !roomId
+    || !fileFingerprint
+    || !sessionId
+    || !uploadId
+    || !objectKey
+    || !fileKey
+    || !noncePrefix
+    || !messageId
+    || !attachmentId
+  ) {
+    return null;
+  }
+  if (!Number.isFinite(chunkSize) || chunkSize <= 0) {
+    return null;
+  }
+  if (!Number.isFinite(size) || size <= 0) {
+    return null;
+  }
+  if (!Number.isFinite(totalChunks) || totalChunks <= 0) {
+    return null;
+  }
+
+  return {
+    pk: relayUploadSessionPk(roomId, fileFingerprint),
+    roomId,
+    fileFingerprint,
+    sessionId,
+    uploadId,
+    objectKey,
+    fileKey,
+    noncePrefix,
+    messageId,
+    attachmentId,
+    size: Math.round(size),
+    chunkSize: Math.round(chunkSize),
+    totalChunks: Math.round(totalChunks),
+    mimeType: normalizeChatAttachmentMimeType(entry.mimeType),
+    name: String(entry.name || "file").trim().slice(0, 120) || "file",
+    updatedAt: Number.isFinite(updatedAt) && updatedAt > 0 ? Math.round(updatedAt) : Date.now(),
+  };
+}
+
+async function storeRelayUploadSessionEntry(entry) {
+  const normalized = normalizeRelayUploadSessionEntry(entry);
+  if (!normalized) {
+    return;
+  }
+  await relayDbPut(RELAY_STORE_UPLOADS, normalized);
+}
+
+async function loadRelayUploadSessionEntry(roomId, fileFingerprint) {
+  const cleanRoomId = normalizeRoomIdValue(roomId);
+  const cleanFingerprint = String(fileFingerprint || "").trim().slice(0, 512);
+  if (!cleanRoomId || !cleanFingerprint) {
+    return null;
+  }
+  return relayDbGet(RELAY_STORE_UPLOADS, relayUploadSessionPk(cleanRoomId, cleanFingerprint));
+}
+
+async function deleteRelayUploadSessionEntry(roomId, fileFingerprint) {
+  const cleanRoomId = normalizeRoomIdValue(roomId);
+  const cleanFingerprint = String(fileFingerprint || "").trim().slice(0, 512);
+  if (!cleanRoomId || !cleanFingerprint) {
+    return;
+  }
+  await relayDbDelete(RELAY_STORE_UPLOADS, relayUploadSessionPk(cleanRoomId, cleanFingerprint));
 }
 
 async function loadRelayEnvelopeRecords(roomId, limit = RELAY_HISTORY_REPLAY_LIMIT) {
@@ -2839,6 +2967,120 @@ async function decryptRelayAttachmentToBlob(roomId, attachmentCipher) {
   });
 }
 
+function normalizeRelayCapabilityPayload(payload = {}) {
+  const token = String(payload?.token || "").trim();
+  const roomId = normalizeRoomIdValue(payload?.roomId);
+  const expiresAt = Number(payload?.expiresAt);
+  if (!token || !roomId || !Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+    return null;
+  }
+  return {
+    token,
+    roomId,
+    expiresAt: Math.round(expiresAt),
+  };
+}
+
+async function requestRelayCapabilityToken(roomId) {
+  const cleanRoomId = normalizeRoomIdValue(roomId);
+  if (!cleanRoomId) {
+    return null;
+  }
+  return new Promise((resolve) => {
+    socket.emit("relay-capability-request", { roomId: cleanRoomId }, (response = {}) => {
+      if (!response?.ok) {
+        resolve(null);
+        return;
+      }
+      resolve(normalizeRelayCapabilityPayload(response));
+    });
+  });
+}
+
+async function ensureRelayCapabilityToken(roomId, { forceRefresh = false } = {}) {
+  const cleanRoomId = normalizeRoomIdValue(roomId);
+  if (!cleanRoomId) {
+    throw new Error("relay_room_required");
+  }
+
+  const now = Date.now();
+  if (
+    !forceRefresh
+    && relayCapabilityToken
+    && relayCapabilityRoomId === cleanRoomId
+    && relayCapabilityTokenExpiresAt - 30 * 1000 > now
+  ) {
+    return relayCapabilityToken;
+  }
+
+  const issued = await requestRelayCapabilityToken(cleanRoomId);
+  if (!issued?.token) {
+    throw new Error("relay_capability_required");
+  }
+
+  relayCapabilityToken = issued.token;
+  relayCapabilityTokenExpiresAt = issued.expiresAt;
+  relayCapabilityRoomId = cleanRoomId;
+  return relayCapabilityToken;
+}
+
+async function relayApiRequest(path, { method = "POST", body = null, roomId = "", retry = true } = {}) {
+  const cleanRoomId = normalizeRoomIdValue(roomId);
+  const token = await ensureRelayCapabilityToken(cleanRoomId);
+  const headers = {
+    Authorization: `Bearer ${token}`,
+  };
+  let requestBody = null;
+  let payloadBody = body;
+  if (body && typeof body === "object") {
+    payloadBody = {
+      ...body,
+      capability: token,
+    };
+    headers["Content-Type"] = "application/json";
+    requestBody = JSON.stringify(payloadBody);
+  } else if (typeof body === "string") {
+    requestBody = body;
+  }
+
+  let response = await fetch(path, {
+    method,
+    headers,
+    body: requestBody,
+  });
+  if (response.status === 401 && retry) {
+    const refreshed = await ensureRelayCapabilityToken(cleanRoomId, { forceRefresh: true });
+    response = await fetch(path, {
+      method,
+      headers: {
+        ...headers,
+        Authorization: `Bearer ${refreshed}`,
+      },
+      body: payloadBody && typeof payloadBody === "object"
+        ? JSON.stringify({
+            ...payloadBody,
+            capability: refreshed,
+          })
+        : requestBody,
+    });
+  }
+
+  let payload = null;
+  try {
+    payload = await response.json();
+  } catch {
+    payload = null;
+  }
+  if (!response.ok || payload?.ok === false) {
+    const errorMessage = String(payload?.error || payload?.message || `http_${response.status}`);
+    const error = new Error(errorMessage);
+    error.status = response.status;
+    error.payload = payload;
+    throw error;
+  }
+  return payload;
+}
+
 async function fetchBackendNetworkMode() {
   try {
     const response = await fetch("/api/network-mode", {
@@ -2850,6 +3092,21 @@ async function fetchBackendNetworkMode() {
 
     const payload = await response.json();
     activeBackendNetworkMode = normalizeNetworkModeId(payload?.mode);
+    const relayUploads = payload?.relayUploads;
+    if (relayUploads && typeof relayUploads === "object") {
+      relayUploadProvider = String(relayUploads.provider || "").trim() || relayUploadProvider;
+      relayUploadLimits = {
+        maxFileBytes: Number(relayUploads?.limits?.maxFileBytes) > 0
+          ? Math.round(Number(relayUploads.limits.maxFileBytes))
+          : relayUploadLimits.maxFileBytes,
+        maxTotalMessageBytes: Number(relayUploads?.limits?.maxTotalMessageBytes) > 0
+          ? Math.round(Number(relayUploads.limits.maxTotalMessageBytes))
+          : relayUploadLimits.maxTotalMessageBytes,
+        chunkSizeBytes: Number(relayUploads?.limits?.chunkSizeBytes) > 0
+          ? Math.round(Number(relayUploads.limits.chunkSizeBytes))
+          : relayUploadLimits.chunkSizeBytes,
+      };
+    }
   } catch {
     activeBackendNetworkMode = normalizeNetworkModeId(preferredNetworkModeId);
   }
@@ -4748,25 +5005,79 @@ function normalizeIncomingChatMessage(message) {
   };
 }
 
-function createRelayAttachmentViewModel(roomId, messageId, attachmentMeta) {
+function normalizeRelayV2AttachmentMeta(value = {}, fallbackMessageId = "") {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const attachmentId = String(value.attachmentId || "").trim().slice(0, 96);
+  const objectKey = String(value.objectKey || "").trim().slice(0, 512);
+  const fileKey = String(value.fileKey || "").trim().slice(0, 256);
+  const noncePrefix = String(value.noncePrefix || "").trim().slice(0, 64);
+  const chunkSize = Number(value.chunkSize);
+  const totalChunks = Number(value.totalChunks);
+  const size = Number(value.size);
+  const messageId = String(value.messageId || fallbackMessageId || "").trim().slice(0, 96);
+  if (!attachmentId || !objectKey || !fileKey || !noncePrefix || !messageId) {
+    return null;
+  }
+  if (!Number.isFinite(chunkSize) || chunkSize <= 0) {
+    return null;
+  }
+  if (!Number.isFinite(totalChunks) || totalChunks <= 0) {
+    return null;
+  }
+  if (!Number.isFinite(size) || size <= 0) {
+    return null;
+  }
+
+  return {
+    attachmentId,
+    messageId,
+    transport: RELAY_ATTACHMENT_TRANSPORT_S3_V2,
+    objectKey,
+    fileKey,
+    noncePrefix,
+    chunkSize: Math.round(chunkSize),
+    totalChunks: Math.round(totalChunks),
+    name: String(value.name || "file").trim().slice(0, 120) || "file",
+    mimeType: normalizeChatAttachmentMimeType(value.mimeType),
+    size: Math.round(size),
+  };
+}
+
+function createRelayAttachmentViewModel(roomId, messageId, attachmentMeta, decryptedMetaById = new Map()) {
   const cleanRoomId = normalizeRoomIdValue(roomId);
   const cleanMessageId = String(messageId || "").trim();
   const cleanAttachmentId = String(attachmentMeta?.attachmentId || "").trim();
-  const mimeType = normalizeChatAttachmentMimeType(attachmentMeta?.mimeType);
+  const attachmentIdForLookup = cleanAttachmentId || `${cleanMessageId}-attachment`;
+  const decryptedMeta = decryptedMetaById instanceof Map
+    ? decryptedMetaById.get(attachmentIdForLookup) || null
+    : null;
+  const isV2 = decryptedMeta?.transport === RELAY_ATTACHMENT_TRANSPORT_S3_V2
+    || attachmentMeta?.transport === RELAY_ATTACHMENT_TRANSPORT_S3_V2;
+  const mimeType = normalizeChatAttachmentMimeType(decryptedMeta?.mimeType || attachmentMeta?.mimeType);
   const previewKind = getChatAttachmentPreviewKind(mimeType);
 
   return {
-    id: cleanAttachmentId || `${cleanMessageId}-attachment`,
+    id: attachmentIdForLookup,
     messageId: cleanMessageId,
     roomId: cleanRoomId,
-    name: String(attachmentMeta?.name || t("encryptedAttachment")).trim().slice(0, 120) || t("encryptedAttachment"),
+    name: String(decryptedMeta?.name || attachmentMeta?.name || t("encryptedAttachment")).trim().slice(0, 120) || t("encryptedAttachment"),
     mimeType,
-    size: Number.isFinite(Number(attachmentMeta?.size))
-      ? Math.max(0, Math.round(Number(attachmentMeta.size)))
+    size: Number.isFinite(Number(decryptedMeta?.size || attachmentMeta?.size))
+      ? Math.max(0, Math.round(Number(decryptedMeta?.size || attachmentMeta?.size)))
       : 0,
     url: "",
     previewKind,
     encrypted: true,
+    transport: isV2 ? RELAY_ATTACHMENT_TRANSPORT_S3_V2 : "",
+    objectKey: isV2
+      ? String(decryptedMeta?.objectKey || attachmentMeta?.objectKey || "").trim()
+      : "",
+    fileKey: isV2 ? String(decryptedMeta?.fileKey || "").trim() : "",
+    noncePrefix: isV2 ? String(decryptedMeta?.noncePrefix || "").trim() : "",
+    chunkSize: isV2 ? Number(decryptedMeta?.chunkSize) || 0 : 0,
+    totalChunks: isV2 ? Number(decryptedMeta?.totalChunks) || 0 : 0,
   };
 }
 
@@ -4844,11 +5155,20 @@ async function decryptRelayEnvelopeToMessage(envelope, sourceId = "") {
 
   const payload = decrypted && typeof decrypted === "object" ? decrypted : {};
   const messageUserId = String(payload.userId || normalizedEnvelope.senderId || "").trim();
+  const decryptedAttachmentsV2 = Array.isArray(payload.attachmentsV2)
+    ? payload.attachmentsV2
+        .map((item) => normalizeRelayV2AttachmentMeta(item, normalizedEnvelope.messageId))
+        .filter(Boolean)
+    : [];
+  const decryptedMetaById = new Map(
+    decryptedAttachmentsV2.map((item) => [item.attachmentId, item])
+  );
   const attachments = Array.isArray(normalizedEnvelope.attachmentRefs)
     ? normalizedEnvelope.attachmentRefs.map((item) => createRelayAttachmentViewModel(
       normalizedEnvelope.roomId,
       normalizedEnvelope.messageId,
-      item
+      item,
+      decryptedMetaById
     ))
     : [];
 
@@ -4867,11 +5187,13 @@ async function decryptRelayEnvelopeToMessage(envelope, sourceId = "") {
         selfId
       );
     }
-    await hydrateRelayAttachmentUrl(
-      normalizedEnvelope.roomId,
-      normalizedEnvelope.messageId,
-      attachment.id
-    );
+    if (attachment.transport !== RELAY_ATTACHMENT_TRANSPORT_S3_V2) {
+      await hydrateRelayAttachmentUrl(
+        normalizedEnvelope.roomId,
+        normalizedEnvelope.messageId,
+        attachment.id
+      );
+    }
   }
 
   return {
@@ -5025,6 +5347,502 @@ async function sendRelayHistoryChunkToRequester({ roomId, requestId, requesterId
     targetId: cleanRequesterId,
     envelopes,
   });
+}
+
+function buildRelayV2ChunkIv(noncePrefixBase64, chunkIndex) {
+  const prefix = base64ToUint8Array(noncePrefixBase64);
+  if (prefix.length !== 8) {
+    throw new Error("invalid_nonce_prefix");
+  }
+  const normalizedChunkIndex = Number(chunkIndex);
+  if (!Number.isFinite(normalizedChunkIndex) || normalizedChunkIndex < 0) {
+    throw new Error("invalid_chunk_index");
+  }
+  const iv = new Uint8Array(12);
+  iv.set(prefix, 0);
+  const view = new DataView(iv.buffer);
+  view.setUint32(8, Math.round(normalizedChunkIndex), false);
+  return iv;
+}
+
+async function importRelayV2FileKey(fileKeyBase64, usage = ["encrypt", "decrypt"]) {
+  const bytes = base64ToUint8Array(fileKeyBase64);
+  if (bytes.length !== 32) {
+    throw new Error("invalid_file_key");
+  }
+  return crypto.subtle.importKey(
+    "raw",
+    bytes,
+    {
+      name: "AES-GCM",
+      length: 256,
+    },
+    false,
+    usage
+  );
+}
+
+async function encryptRelayV2AttachmentChunk(fileKeyBase64, noncePrefixBase64, chunkIndex, plainBuffer) {
+  const key = await importRelayV2FileKey(fileKeyBase64, ["encrypt"]);
+  const iv = buildRelayV2ChunkIv(noncePrefixBase64, chunkIndex);
+  return crypto.subtle.encrypt(
+    {
+      name: "AES-GCM",
+      iv,
+    },
+    key,
+    plainBuffer
+  );
+}
+
+async function decryptRelayV2AttachmentChunk(fileKeyBase64, noncePrefixBase64, chunkIndex, cipherBuffer) {
+  const key = await importRelayV2FileKey(fileKeyBase64, ["decrypt"]);
+  const iv = buildRelayV2ChunkIv(noncePrefixBase64, chunkIndex);
+  return crypto.subtle.decrypt(
+    {
+      name: "AES-GCM",
+      iv,
+    },
+    key,
+    cipherBuffer
+  );
+}
+
+async function relayV2InitUpload(roomId, sessionDraft) {
+  const cleanRoomId = normalizeRoomIdValue(roomId);
+  return relayApiRequest("/api/relay/uploads/init", {
+    method: "POST",
+    roomId: cleanRoomId,
+    body: {
+      roomId: cleanRoomId,
+      messageId: sessionDraft.messageId,
+      attachmentId: sessionDraft.attachmentId,
+      size: sessionDraft.size,
+      mimeType: sessionDraft.mimeType,
+      chunkSize: sessionDraft.chunkSize,
+      fileFingerprint: sessionDraft.fileFingerprint,
+    },
+  });
+}
+
+async function relayV2GetPartUploadUrl(roomId, sessionId, partNumber) {
+  const cleanRoomId = normalizeRoomIdValue(roomId);
+  return relayApiRequest("/api/relay/uploads/part-url", {
+    method: "POST",
+    roomId: cleanRoomId,
+    body: {
+      roomId: cleanRoomId,
+      sessionId,
+      partNumber,
+    },
+  });
+}
+
+async function relayV2GetUploadStatus(roomId, sessionId) {
+  const cleanRoomId = normalizeRoomIdValue(roomId);
+  const token = await ensureRelayCapabilityToken(cleanRoomId);
+  let statusUrl = `/api/relay/uploads/status?roomId=${encodeURIComponent(cleanRoomId)}&sessionId=${encodeURIComponent(sessionId)}&capability=${encodeURIComponent(token)}`;
+  let response = await fetch(
+    statusUrl,
+    {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    }
+  );
+  if (response.status === 401) {
+    const refreshed = await ensureRelayCapabilityToken(cleanRoomId, { forceRefresh: true });
+    statusUrl = `/api/relay/uploads/status?roomId=${encodeURIComponent(cleanRoomId)}&sessionId=${encodeURIComponent(sessionId)}&capability=${encodeURIComponent(refreshed)}`;
+    response = await fetch(
+      statusUrl,
+      {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${refreshed}`,
+        },
+      }
+    );
+  }
+
+  const payload = await response.json();
+  if (!response.ok || payload?.ok === false) {
+    throw new Error(String(payload?.error || `status_${response.status}`));
+  }
+  return payload;
+}
+
+async function relayV2CompleteUpload(roomId, sessionId, parts) {
+  const cleanRoomId = normalizeRoomIdValue(roomId);
+  return relayApiRequest("/api/relay/uploads/complete", {
+    method: "POST",
+    roomId: cleanRoomId,
+    body: {
+      roomId: cleanRoomId,
+      sessionId,
+      parts,
+    },
+  });
+}
+
+async function relayV2AbortUpload(roomId, sessionId) {
+  const cleanRoomId = normalizeRoomIdValue(roomId);
+  return relayApiRequest("/api/relay/uploads/abort", {
+    method: "POST",
+    roomId: cleanRoomId,
+    body: {
+      roomId: cleanRoomId,
+      sessionId,
+    },
+  });
+}
+
+function getRelayUploadLimits() {
+  return {
+    maxFileBytes: Number(relayUploadLimits?.maxFileBytes) > 0
+      ? Math.round(Number(relayUploadLimits.maxFileBytes))
+      : RELAY_V2_MAX_FILE_BYTES,
+    maxTotalMessageBytes: Number(relayUploadLimits?.maxTotalMessageBytes) > 0
+      ? Math.round(Number(relayUploadLimits.maxTotalMessageBytes))
+      : RELAY_V2_MAX_TOTAL_MESSAGE_BYTES,
+    chunkSizeBytes: Number(relayUploadLimits?.chunkSizeBytes) > 0
+      ? Math.round(Number(relayUploadLimits.chunkSizeBytes))
+      : RELAY_V2_UPLOAD_CHUNK_SIZE_BYTES,
+  };
+}
+
+async function uploadRelayV2Attachment(roomId, attachment, messageId, { allowMessageIdAdopt = false } = {}) {
+  const cleanRoomId = normalizeRoomIdValue(roomId);
+  if (!cleanRoomId) {
+    throw new Error("relay_room_required");
+  }
+  if (!attachment?.file || !(attachment.file instanceof File)) {
+    throw new Error("attachment_file_required");
+  }
+
+  const limits = getRelayUploadLimits();
+  if (attachment.size > limits.maxFileBytes) {
+    throw new Error("attachment_too_large");
+  }
+
+  const fileFingerprint = buildRelayUploadFileFingerprint(attachment);
+  const chunkSize = limits.chunkSizeBytes;
+  const totalChunks = Math.max(1, Math.ceil(attachment.size / chunkSize));
+  let uploadSession = await loadRelayUploadSessionEntry(cleanRoomId, fileFingerprint);
+  const isResumable = uploadSession
+    && uploadSession.size === attachment.size
+    && uploadSession.chunkSize === chunkSize
+    && (
+      uploadSession.messageId === messageId
+      || (allowMessageIdAdopt && uploadSession.messageId)
+    );
+
+  if (!isResumable) {
+    if (uploadSession?.sessionId) {
+      await relayV2AbortUpload(cleanRoomId, uploadSession.sessionId).catch(() => {
+        // no-op
+      });
+      await deleteRelayUploadSessionEntry(cleanRoomId, fileFingerprint).catch(() => {
+        // no-op
+      });
+    }
+    uploadSession = null;
+  }
+
+  if (!uploadSession) {
+    const draft = {
+      roomId: cleanRoomId,
+      messageId,
+      attachmentId: createRelayRequestId("att"),
+      size: attachment.size,
+      mimeType: attachment.mimeType,
+      chunkSize,
+      fileFingerprint,
+      fileKey: arrayBufferToBase64(crypto.getRandomValues(new Uint8Array(32))),
+      noncePrefix: arrayBufferToBase64(crypto.getRandomValues(new Uint8Array(8))),
+      totalChunks,
+      name: attachment.name,
+    };
+    const init = await relayV2InitUpload(cleanRoomId, draft);
+    uploadSession = {
+      ...draft,
+      sessionId: String(init.sessionId || ""),
+      uploadId: String(init.uploadId || ""),
+      objectKey: String(init.objectKey || ""),
+      updatedAt: Date.now(),
+    };
+    await storeRelayUploadSessionEntry(uploadSession);
+  }
+
+  let statusPayload = await relayV2GetUploadStatus(cleanRoomId, uploadSession.sessionId);
+  const uploadedPartSet = new Set(
+    Array.isArray(statusPayload?.uploadedParts)
+      ? statusPayload.uploadedParts.map((item) => Number(item?.partNumber)).filter((item) => Number.isFinite(item))
+      : []
+  );
+
+  for (let partNumber = 1; partNumber <= uploadSession.totalChunks; partNumber += 1) {
+    if (uploadedPartSet.has(partNumber)) {
+      continue;
+    }
+
+    const start = (partNumber - 1) * uploadSession.chunkSize;
+    const end = Math.min(attachment.size, start + uploadSession.chunkSize);
+    const plainBuffer = await attachment.file.slice(start, end).arrayBuffer();
+    const encryptedBuffer = await encryptRelayV2AttachmentChunk(
+      uploadSession.fileKey,
+      uploadSession.noncePrefix,
+      partNumber - 1,
+      plainBuffer
+    );
+    const partUrlPayload = await relayV2GetPartUploadUrl(cleanRoomId, uploadSession.sessionId, partNumber);
+    const uploadHeaders = {
+      "Content-Type": "application/octet-stream",
+    };
+    let uploadUrl = partUrlPayload.url;
+    if (String(partUrlPayload?.url || "").startsWith("/api/")) {
+      const partToken = await ensureRelayCapabilityToken(cleanRoomId);
+      uploadHeaders.Authorization = `Bearer ${partToken}`;
+      uploadUrl = `${partUrlPayload.url}${partUrlPayload.url.includes("?") ? "&" : "?"}capability=${encodeURIComponent(partToken)}`;
+    }
+    const uploadResponse = await fetch(uploadUrl, {
+      method: "PUT",
+      body: encryptedBuffer,
+      headers: uploadHeaders,
+    });
+    if (!uploadResponse.ok) {
+      throw new Error(`relay_upload_part_failed_${uploadResponse.status}`);
+    }
+
+    uploadSession.updatedAt = Date.now();
+    await storeRelayUploadSessionEntry(uploadSession);
+
+    const progress = Math.round((partNumber / uploadSession.totalChunks) * 100);
+    setStatus(`Uploading ${attachment.name}: ${progress}%`);
+  }
+
+  statusPayload = await relayV2GetUploadStatus(cleanRoomId, uploadSession.sessionId);
+  const completeParts = Array.isArray(statusPayload?.uploadedParts)
+    ? statusPayload.uploadedParts
+        .map((item) => ({
+          partNumber: Number(item?.partNumber),
+          etag: String(item?.etag || "").trim(),
+        }))
+        .filter((item) => Number.isFinite(item.partNumber) && item.partNumber > 0 && item.etag)
+        .sort((left, right) => left.partNumber - right.partNumber)
+    : [];
+  if (completeParts.length < uploadSession.totalChunks) {
+    throw new Error("relay_upload_incomplete");
+  }
+
+  await relayV2CompleteUpload(cleanRoomId, uploadSession.sessionId, completeParts);
+  await deleteRelayUploadSessionEntry(cleanRoomId, fileFingerprint);
+
+  return {
+    messageId: uploadSession.messageId,
+    attachmentId: uploadSession.attachmentId,
+    name: attachment.name,
+    mimeType: attachment.mimeType,
+    size: attachment.size,
+    transport: RELAY_ATTACHMENT_TRANSPORT_S3_V2,
+    objectKey: uploadSession.objectKey,
+    fileKey: uploadSession.fileKey,
+    noncePrefix: uploadSession.noncePrefix,
+    chunkSize: uploadSession.chunkSize,
+    totalChunks: uploadSession.totalChunks,
+  };
+}
+
+async function relayV2GetDownloadUrl(roomId, objectKey) {
+  const cleanRoomId = normalizeRoomIdValue(roomId);
+  return relayApiRequest("/api/relay/attachments/download-url", {
+    method: "POST",
+    roomId: cleanRoomId,
+    body: {
+      roomId: cleanRoomId,
+      objectKey,
+    },
+  });
+}
+
+function concatUint8Arrays(parts) {
+  const list = Array.isArray(parts) ? parts : [];
+  const total = list.reduce((acc, item) => acc + (item?.length || 0), 0);
+  const combined = new Uint8Array(total);
+  let offset = 0;
+  for (const part of list) {
+    if (!(part instanceof Uint8Array) || part.length === 0) {
+      continue;
+    }
+    combined.set(part, offset);
+    offset += part.length;
+  }
+  return combined;
+}
+
+async function decryptRelayV2AttachmentResponse(response, attachment, onChunk, onProgress) {
+  const totalChunks = Number(attachment?.totalChunks);
+  const chunkSize = Number(attachment?.chunkSize);
+  const totalSize = Number(attachment?.size);
+  const fileKey = String(attachment?.fileKey || "");
+  const noncePrefix = String(attachment?.noncePrefix || "");
+  if (
+    !Number.isFinite(totalChunks)
+    || totalChunks <= 0
+    || !Number.isFinite(chunkSize)
+    || chunkSize <= 0
+    || !Number.isFinite(totalSize)
+    || totalSize <= 0
+    || !fileKey
+    || !noncePrefix
+  ) {
+    throw new Error("relay_v2_attachment_meta_invalid");
+  }
+  if (!response?.body) {
+    throw new Error("relay_v2_attachment_stream_unavailable");
+  }
+
+  const reader = response.body.getReader();
+  let pending = new Uint8Array(0);
+  let decryptedBytes = 0;
+
+  try {
+    for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex += 1) {
+      const plainSize = chunkIndex === totalChunks - 1
+        ? totalSize - chunkSize * (totalChunks - 1)
+        : chunkSize;
+      const encryptedSize = plainSize + 16;
+      while (pending.length < encryptedSize) {
+        const { done, value } = await reader.read();
+        if (done) {
+          throw new Error("relay_v2_attachment_truncated");
+        }
+        const incoming = value instanceof Uint8Array ? value : new Uint8Array(value);
+        pending = concatUint8Arrays([pending, incoming]);
+      }
+
+      const encryptedChunk = pending.slice(0, encryptedSize);
+      pending = pending.slice(encryptedSize);
+      const decryptedChunk = await decryptRelayV2AttachmentChunk(
+        fileKey,
+        noncePrefix,
+        chunkIndex,
+        encryptedChunk
+      );
+      const decryptedView = decryptedChunk instanceof Uint8Array
+        ? decryptedChunk
+        : new Uint8Array(decryptedChunk);
+      decryptedBytes += decryptedView.length;
+      if (typeof onChunk === "function") {
+        await onChunk(decryptedView);
+      }
+      if (typeof onProgress === "function") {
+        onProgress(decryptedBytes, totalSize);
+      }
+    }
+  } finally {
+    try {
+      reader.releaseLock();
+    } catch {
+      // no-op
+    }
+  }
+}
+
+async function saveRelayV2AttachmentViaFileSystemApi(response, attachment) {
+  const picker = window.showSaveFilePicker;
+  if (typeof picker !== "function") {
+    return false;
+  }
+  const suggestedName = String(attachment?.name || "file").trim() || "file";
+  const handle = await picker({
+    suggestedName,
+  });
+  const writable = await handle.createWritable();
+  try {
+    await decryptRelayV2AttachmentResponse(
+      response,
+      attachment,
+      async (chunk) => {
+        await writable.write(chunk);
+      },
+      (loaded, total) => {
+        const progress = Math.min(100, Math.max(0, Math.round((loaded / total) * 100)));
+        setStatus(`Downloading ${suggestedName}: ${progress}%`);
+      }
+    );
+    await writable.close();
+    return true;
+  } catch (error) {
+    try {
+      await writable.abort();
+    } catch {
+      // no-op
+    }
+    throw error;
+  }
+}
+
+async function saveRelayV2AttachmentViaBlob(response, attachment) {
+  const chunks = [];
+  await decryptRelayV2AttachmentResponse(
+    response,
+    attachment,
+    async (chunk) => {
+      chunks.push(chunk);
+    },
+    (loaded, total) => {
+      const progress = Math.min(100, Math.max(0, Math.round((loaded / total) * 100)));
+      setStatus(`Downloading ${attachment.name}: ${progress}%`);
+    }
+  );
+  const blob = new Blob(chunks, {
+    type: normalizeChatAttachmentMimeType(attachment?.mimeType),
+  });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = String(attachment?.name || "file").trim() || "file";
+  link.rel = "noopener noreferrer";
+  link.click();
+  setTimeout(() => {
+    URL.revokeObjectURL(url);
+  }, 30000);
+}
+
+async function downloadRelayV2Attachment(attachment, roomId) {
+  const cleanRoomId = normalizeRoomIdValue(roomId || attachment?.roomId || roomState?.id);
+  if (!cleanRoomId) {
+    setStatus(t("attachmentSourceUnavailable"));
+    return;
+  }
+  const objectKey = String(attachment?.objectKey || "").trim();
+  if (!objectKey) {
+    setStatus(t("attachmentSourceUnavailable"));
+    return;
+  }
+
+  try {
+    const payload = await relayV2GetDownloadUrl(cleanRoomId, objectKey);
+    const response = await fetch(payload.url, {
+      method: "GET",
+    });
+    if (!response.ok) {
+      throw new Error(`relay_v2_download_${response.status}`);
+    }
+
+    try {
+      const savedByFsApi = await saveRelayV2AttachmentViaFileSystemApi(response.clone(), attachment);
+      if (!savedByFsApi) {
+        await saveRelayV2AttachmentViaBlob(response, attachment);
+      }
+    } catch {
+      await saveRelayV2AttachmentViaBlob(response, attachment);
+    }
+    setStatus(`${attachment.name} downloaded`);
+  } catch {
+    setStatus(t("attachmentSourceUnavailable"));
+  }
 }
 
 function splitRelayCiphertextToChunks(ciphertext, chunkSize = RELAY_ATTACHMENT_CHUNK_SIZE) {
@@ -5364,11 +6182,18 @@ function createChatAttachmentElement(attachment, messageId = "", roomId = "") {
     button.textContent = t("downloadEncryptedAttachment");
     button.setAttribute("aria-label", t("downloadEncryptedAttachment"));
     button.addEventListener("click", () => {
-      void requestRelayAttachmentFromPeers(
-        normalizeRoomIdValue(roomId || attachment.roomId || roomState?.id),
-        String(messageId || attachment.messageId || "").trim(),
-        attachment
-      );
+      if (attachment.transport === RELAY_ATTACHMENT_TRANSPORT_S3_V2) {
+        void downloadRelayV2Attachment(
+          attachment,
+          normalizeRoomIdValue(roomId || attachment.roomId || roomState?.id)
+        );
+      } else {
+        void requestRelayAttachmentFromPeers(
+          normalizeRoomIdValue(roomId || attachment.roomId || roomState?.id),
+          String(messageId || attachment.messageId || "").trim(),
+          attachment
+        );
+      }
     });
     wrapper.appendChild(button);
 
@@ -5551,6 +6376,8 @@ function appendPendingChatAttachments(files) {
   }
 
   let warnedByCount = false;
+  const limits = getRelayUploadLimits();
+  let currentTotalSize = pendingChatAttachments.reduce((acc, item) => acc + (Number(item?.size) || 0), 0);
 
   for (const file of list) {
     if (!(file instanceof File)) {
@@ -5565,6 +6392,14 @@ function appendPendingChatAttachments(files) {
     const name = String(file.name || "").trim().slice(0, 120) || "file";
     const size = Number(file.size);
     if (!Number.isFinite(size) || size <= 0) {
+      continue;
+    }
+    if (isRelayModeActive() && size > limits.maxFileBytes) {
+      setStatus(t("attachmentTooLarge", { name, max: formatFileSize(limits.maxFileBytes) }));
+      continue;
+    }
+    if (isRelayModeActive() && currentTotalSize + size > limits.maxTotalMessageBytes) {
+      setStatus(t("attachmentTotalTooLarge", { max: formatFileSize(limits.maxTotalMessageBytes) }));
       continue;
     }
 
@@ -5589,6 +6424,7 @@ function appendPendingChatAttachments(files) {
       objectUrl,
     });
     pendingChatAttachmentSeq += 1;
+    currentTotalSize += size;
   }
 
   if (warnedByCount) {
@@ -5667,39 +6503,40 @@ async function buildRelayEncryptedChatPacket(roomId, text) {
     throw new Error("room_key_required");
   }
 
-  const messageId = createRelayRequestId("msg");
+  let messageId = createRelayRequestId("msg");
   const attachmentRefs = [];
-  const attachmentPayloads = [];
+  const attachmentsV2 = [];
+  const limits = getRelayUploadLimits();
+  const totalSize = pendingChatAttachments.reduce((acc, item) => acc + (Number(item?.size) || 0), 0);
+  if (totalSize > limits.maxTotalMessageBytes) {
+    throw new Error("attachment_total_too_large");
+  }
 
   for (const attachment of pendingChatAttachments) {
-    const attachmentId = createRelayRequestId("att");
-    const encrypted = await encryptRelayAttachmentPayload(cleanRoomId, attachment);
-    const attachmentPayload = {
+    const uploaded = await uploadRelayV2Attachment(
+      cleanRoomId,
+      attachment,
       messageId,
-      attachmentId,
-      name: attachment.name,
-      mimeType: attachment.mimeType,
-      size: attachment.size,
-      iv: encrypted.iv,
-      ciphertext: encrypted.ciphertext,
-    };
-
+      {
+        allowMessageIdAdopt: attachmentRefs.length === 0,
+      }
+    );
+    if (attachmentRefs.length === 0 && uploaded.messageId && uploaded.messageId !== messageId) {
+      messageId = uploaded.messageId;
+    }
+    if (uploaded.messageId !== messageId) {
+      throw new Error("relay_message_id_mismatch");
+    }
+    attachmentsV2.push(uploaded);
     attachmentRefs.push({
-      messageId,
-      attachmentId,
-      name: attachment.name,
-      mimeType: attachment.mimeType,
-      size: attachment.size,
+      messageId: uploaded.messageId,
+      attachmentId: uploaded.attachmentId,
+      transport: RELAY_ATTACHMENT_TRANSPORT_S3_V2,
+      objectKey: uploaded.objectKey,
+      size: uploaded.size,
+      name: uploaded.name,
+      mimeType: uploaded.mimeType,
     });
-
-    await storeRelayAttachmentCipher(cleanRoomId, attachmentPayload);
-    if (selfId) {
-      registerRelayAttachmentSource(cleanRoomId, messageId, attachmentId, selfId);
-    }
-
-    if (String(attachmentPayload.ciphertext || "").length <= RELAY_INLINE_ATTACHMENT_EMIT_MAX_BYTES) {
-      attachmentPayloads.push(attachmentPayload);
-    }
   }
 
   const encryptedPayload = await encryptRelayPayload(cleanRoomId, {
@@ -5713,12 +6550,26 @@ async function buildRelayEncryptedChatPacket(roomId, text) {
       mimeType: item.mimeType,
       size: item.size,
     })),
+    attachmentsV2: attachmentsV2.map((item) => ({
+      messageId: item.messageId,
+      attachmentId: item.attachmentId,
+      transport: RELAY_ATTACHMENT_TRANSPORT_S3_V2,
+      objectKey: item.objectKey,
+      name: item.name,
+      mimeType: item.mimeType,
+      size: item.size,
+      fileKey: item.fileKey,
+      noncePrefix: item.noncePrefix,
+      chunkSize: item.chunkSize,
+      totalChunks: item.totalChunks,
+    })),
   });
 
   return {
     envelope: {
       v: RELAY_CIPHER_VERSION,
       alg: RELAY_CRYPTO_ALGORITHM,
+      transportVersion: 2,
       roomId: cleanRoomId,
       messageId,
       senderId: CHAT_AUTHOR_ID,
@@ -5727,7 +6578,7 @@ async function buildRelayEncryptedChatPacket(roomId, text) {
       ciphertext: encryptedPayload.ciphertext,
       attachmentRefs,
     },
-    attachmentPayloads,
+    attachmentPayloads: [],
   };
 }
 
@@ -5878,10 +6729,32 @@ function requestSaveChatMessageEdit(messageId) {
     const attachmentRefs = keptAttachments.map((item) => ({
       messageId: message.id,
       attachmentId: String(item.id || "").trim(),
+      transport: item.transport === RELAY_ATTACHMENT_TRANSPORT_S3_V2
+        ? RELAY_ATTACHMENT_TRANSPORT_S3_V2
+        : "",
+      objectKey: item.transport === RELAY_ATTACHMENT_TRANSPORT_S3_V2
+        ? String(item.objectKey || "").trim()
+        : "",
       name: String(item.name || "file"),
       mimeType: normalizeChatAttachmentMimeType(item.mimeType),
       size: Number(item.size) || 0,
     }));
+    const attachmentsV2 = keptAttachments
+      .filter((item) => item.transport === RELAY_ATTACHMENT_TRANSPORT_S3_V2)
+      .map((item) => ({
+        messageId: message.id,
+        attachmentId: String(item.id || "").trim(),
+        transport: RELAY_ATTACHMENT_TRANSPORT_S3_V2,
+        objectKey: String(item.objectKey || "").trim(),
+        name: String(item.name || "file"),
+        mimeType: normalizeChatAttachmentMimeType(item.mimeType),
+        size: Number(item.size) || 0,
+        fileKey: String(item.fileKey || "").trim(),
+        noncePrefix: String(item.noncePrefix || "").trim(),
+        chunkSize: Number(item.chunkSize) || 0,
+        totalChunks: Number(item.totalChunks) || 0,
+      }))
+      .filter((item) => item.attachmentId && item.objectKey && item.fileKey && item.noncePrefix);
 
     (async () => {
       try {
@@ -5891,6 +6764,7 @@ function requestSaveChatMessageEdit(messageId) {
           userName: message.userName || getProfileName(),
           editedAt: Date.now(),
           attachments: attachmentRefs,
+          attachmentsV2,
         });
 
         socket.emit(
@@ -5904,6 +6778,7 @@ function requestSaveChatMessageEdit(messageId) {
               messageId: message.id,
               senderId: message.userId || CHAT_AUTHOR_ID,
               createdAt: Number(message.createdAt) || Date.now(),
+              transportVersion: 2,
               iv: encryptedPayload.iv,
               ciphertext: encryptedPayload.ciphertext,
               attachmentRefs,
@@ -10637,6 +11512,9 @@ function resetSessionState() {
   replaceChatMessages([]);
   chatSubmitInProgress = false;
   clearPendingChatAttachments();
+  relayCapabilityToken = "";
+  relayCapabilityTokenExpiresAt = 0;
+  relayCapabilityRoomId = "";
   updateChatAvailability();
   updateRoomLabels(MAIN_PAGE_LABEL);
   renderVoiceChannels();
@@ -11259,6 +12137,10 @@ if (chatForm) {
       const normalizedError = String(error?.message || "").trim().toLowerCase();
       if (normalizedError.includes("room_key_required")) {
         setStatus(t("roomKeyRequired"));
+      } else if (normalizedError.includes("attachment_too_large")) {
+        setStatus(t("attachmentTooLarge", { name: "file", max: formatFileSize(getRelayUploadLimits().maxFileBytes) }));
+      } else if (normalizedError.includes("attachment_total_too_large")) {
+        setStatus(t("attachmentTotalTooLarge", { max: formatFileSize(getRelayUploadLimits().maxTotalMessageBytes) }));
       } else {
         setStatus(error?.message || t("chatSendFailed"));
       }

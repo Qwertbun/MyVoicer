@@ -195,3 +195,26 @@ For two PCs in different networks:
 - Host machine quality and bandwidth affect the whole voice room.
 - No persistence/auth/history yet.
 - For strict NAT/mobile networks, TURN is required.
+
+## Relay V2 Large Attachments (up to 10 GiB)
+Relay mode now supports large encrypted attachments with resumable multipart upload.
+
+- Data plane: presigned upload/download URLs (`S3` when configured, memory fallback for local dev/tests).
+- Control plane: Socket.IO (chat, signaling, capability token exchange).
+- Encryption: end-to-end, file key is delivered only inside encrypted relay payload (`attachmentsV2`).
+- Resume: upload sessions are persisted client-side and can continue after reconnect/restart.
+
+Server endpoints:
+- `POST /api/relay/uploads/init`
+- `POST /api/relay/uploads/part-url`
+- `GET /api/relay/uploads/status`
+- `POST /api/relay/uploads/complete`
+- `POST /api/relay/uploads/abort`
+- `POST /api/relay/attachments/download-url`
+
+Socket flow:
+- `relay-capability-request` -> `relay-capability-response { token, expiresAt }`
+
+Environment:
+- see `.env.example` for `RELAY_*` settings (`RELAY_S3_BUCKET`, `RELAY_S3_REGION`, limits, TTLs).
+- when `RELAY_S3_BUCKET`/`RELAY_S3_REGION` are not set, relay upload APIs use in-memory provider for testing.
