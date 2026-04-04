@@ -322,6 +322,7 @@ const I18N = {
     roomKeyUpdateFailed: "Unable to update room key.",
     attachmentSourceUnavailable: "Attachment source is unavailable.",
     legacyRelayAttachmentUnsupported: "Legacy encrypted attachment is no longer supported. Ask the sender to re-upload the file.",
+    legacyRelayAttachmentButton: "Legacy attachment unavailable",
     encryptedAttachment: "Encrypted attachment",
     downloadEncryptedAttachment: "Download encrypted attachment",
     relayHistorySyncing: "Syncing encrypted history...",
@@ -577,6 +578,7 @@ const I18N = {
     roomKeyUpdateFailed: "Не удалось обновить ключ комнаты.",
     attachmentSourceUnavailable: "Источник вложения недоступен.",
     legacyRelayAttachmentUnsupported: "Старые шифрованные вложения больше не поддерживаются. Попросите отправителя загрузить файл заново.",
+    legacyRelayAttachmentButton: "Старое вложение недоступно",
     encryptedAttachment: "Шифрованное вложение",
     downloadEncryptedAttachment: "Скачать шифрованное вложение",
     relayHistorySyncing: "Синхронизация шифрованной истории...",
@@ -6284,11 +6286,20 @@ function createChatAttachmentElement(attachment, messageId = "", roomId = "") {
   wrapper.className = "chat-attachment";
 
   if (attachment.encrypted && !attachment.url) {
+    const isRelayV2Attachment = attachment.transport === RELAY_ATTACHMENT_TRANSPORT_S3_V2;
     const button = document.createElement("button");
     button.type = "button";
     button.className = "chat-attachment-file-link";
-    button.textContent = t("downloadEncryptedAttachment");
-    button.setAttribute("aria-label", t("downloadEncryptedAttachment"));
+    button.textContent = isRelayV2Attachment
+      ? t("downloadEncryptedAttachment")
+      : t("legacyRelayAttachmentButton");
+    button.setAttribute(
+      "aria-label",
+      isRelayV2Attachment ? t("downloadEncryptedAttachment") : t("legacyRelayAttachmentButton")
+    );
+    button.dataset.transport = isRelayV2Attachment ? RELAY_ATTACHMENT_TRANSPORT_S3_V2 : "legacy";
+    button.dataset.attachmentId = String(attachment?.id || "").trim();
+    button.dataset.messageId = String(messageId || attachment?.messageId || "").trim();
     button.addEventListener("click", () => {
       const attachmentRoomId = normalizeRoomIdValue(attachment.roomId || roomId || roomState?.id);
       const attachmentMessageId = String(messageId || attachment.messageId || "").trim();
@@ -6301,7 +6312,7 @@ function createChatAttachmentElement(attachment, messageId = "", roomId = "") {
         hasFileKey: Boolean(String(attachment?.fileKey || "").trim()),
         hasNoncePrefix: Boolean(String(attachment?.noncePrefix || "").trim()),
       });
-      if (attachment.transport === RELAY_ATTACHMENT_TRANSPORT_S3_V2) {
+      if (isRelayV2Attachment) {
         void downloadRelayV2Attachment(
           attachment,
           attachmentRoomId
