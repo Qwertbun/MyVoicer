@@ -120,6 +120,7 @@ const DEFAULT_RTC_CONFIG = {
   iceTransportPolicy: "all",
 };
 const PROJECT_NAME = "synto";
+const APP_BUILD_ID = "20260404-relay-v2trace7";
 const DEFAULT_MIC_AUDIO_PROCESSING_CONSTRAINTS = {
   echoCancellation: true,
   noiseSuppression: true,
@@ -2229,6 +2230,13 @@ function isRelayModeActive() {
 
 function createRelayRequestId(prefix = "relay") {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function delayMs(durationMs) {
+  const timeout = Number(durationMs);
+  return new Promise((resolve) => {
+    setTimeout(resolve, Number.isFinite(timeout) && timeout > 0 ? Math.round(timeout) : 0);
+  });
 }
 
 function estimatePayloadSize(value) {
@@ -5654,23 +5662,52 @@ async function uploadRelayV2Attachment(roomId, attachment, messageId, { allowMes
       partNumber - 1,
       plainBuffer
     );
-    const partUrlPayload = await relayV2GetPartUploadUrl(cleanRoomId, uploadSession.sessionId, partNumber);
-    const uploadHeaders = {
-      "Content-Type": "application/octet-stream",
-    };
-    let uploadUrl = partUrlPayload.url;
-    if (String(partUrlPayload?.url || "").startsWith("/api/")) {
-      const partToken = await ensureRelayCapabilityToken(cleanRoomId);
-      uploadHeaders.Authorization = `Bearer ${partToken}`;
-      uploadUrl = `${partUrlPayload.url}${partUrlPayload.url.includes("?") ? "&" : "?"}capability=${encodeURIComponent(partToken)}`;
+    const maxPartUploadAttempts = 3;
+    let uploaded = false;
+    let uploadError = null;
+    for (let attempt = 1; attempt <= maxPartUploadAttempts; attempt += 1) {
+      try {
+        const partUrlPayload = await relayV2GetPartUploadUrl(cleanRoomId, uploadSession.sessionId, partNumber);
+        const uploadHeaders = {
+          "Content-Type": "application/octet-stream",
+        };
+        let uploadUrl = partUrlPayload.url;
+        if (String(partUrlPayload?.url || "").startsWith("/api/")) {
+          const partToken = await ensureRelayCapabilityToken(cleanRoomId);
+          uploadHeaders.Authorization = `Bearer ${partToken}`;
+          uploadUrl = `${partUrlPayload.url}${partUrlPayload.url.includes("?") ? "&" : "?"}capability=${encodeURIComponent(partToken)}`;
+        }
+        const uploadResponse = await fetch(uploadUrl, {
+          method: "PUT",
+          body: encryptedBuffer,
+          headers: uploadHeaders,
+        });
+        if (!uploadResponse.ok) {
+          throw new Error(`relay_upload_part_failed_${uploadResponse.status}`);
+        }
+        uploaded = true;
+        uploadError = null;
+        break;
+      } catch (error) {
+        uploadError = error;
+        if (attempt >= maxPartUploadAttempts) {
+          break;
+        }
+        console.warn("relay_v2_part_upload_retry", {
+          roomId: cleanRoomId,
+          messageId: uploadSession.messageId,
+          attachmentId: uploadSession.attachmentId,
+          sessionId: uploadSession.sessionId,
+          partNumber,
+          attempt,
+          maxAttempts: maxPartUploadAttempts,
+          error: String(error?.message || "unknown"),
+        });
+        await delayMs(250 * attempt);
+      }
     }
-    const uploadResponse = await fetch(uploadUrl, {
-      method: "PUT",
-      body: encryptedBuffer,
-      headers: uploadHeaders,
-    });
-    if (!uploadResponse.ok) {
-      throw new Error(`relay_upload_part_failed_${uploadResponse.status}`);
+    if (!uploaded) {
+      throw uploadError || new Error("relay_upload_part_failed");
     }
 
     uploadSession.updatedAt = Date.now();
@@ -13115,6 +13152,7 @@ if (hasOpusCodec && hasRedCodec) {
 } else {
   console.warn("Audio codec preference fallback: Opus codec is not exposed in capabilities");
 }
+console.info(`Client build: ${APP_BUILD_ID}`);
 console.info(`Experimental command available: ${DLOLMUS_COMMAND_PREFIX} on|off`);
 console.info(`RNNoise command available: ${RN_COMMAND_PREFIX} on|off`);
 
