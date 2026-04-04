@@ -321,6 +321,7 @@ const I18N = {
     roomKeyUpdated: "Room key updated for this room on this device.",
     roomKeyUpdateFailed: "Unable to update room key.",
     attachmentSourceUnavailable: "Attachment source is unavailable.",
+    legacyRelayAttachmentUnsupported: "Legacy encrypted attachment is no longer supported. Ask the sender to re-upload the file.",
     encryptedAttachment: "Encrypted attachment",
     downloadEncryptedAttachment: "Download encrypted attachment",
     relayHistorySyncing: "Syncing encrypted history...",
@@ -575,6 +576,7 @@ const I18N = {
     roomKeyUpdated: "Ключ комнаты обновлён на этом устройстве.",
     roomKeyUpdateFailed: "Не удалось обновить ключ комнаты.",
     attachmentSourceUnavailable: "Источник вложения недоступен.",
+    legacyRelayAttachmentUnsupported: "Старые шифрованные вложения больше не поддерживаются. Попросите отправителя загрузить файл заново.",
     encryptedAttachment: "Шифрованное вложение",
     downloadEncryptedAttachment: "Скачать шифрованное вложение",
     relayHistorySyncing: "Синхронизация шифрованной истории...",
@@ -5202,13 +5204,6 @@ async function decryptRelayEnvelopeToMessage(envelope, sourceId = "") {
         selfId
       );
     }
-    if (attachment.transport !== RELAY_ATTACHMENT_TRANSPORT_S3_V2) {
-      await hydrateRelayAttachmentUrl(
-        normalizedEnvelope.roomId,
-        normalizedEnvelope.messageId,
-        attachment.id
-      );
-    }
   }
 
   return {
@@ -5838,6 +5833,16 @@ function reportAttachmentSourceUnavailable(reason, context = {}, error = null) {
   console.error("attachment_source_unavailable", details);
 }
 
+function reportLegacyRelayAttachmentUnsupported(attachment, roomId = "") {
+  setStatus(t("legacyRelayAttachmentUnsupported"));
+  console.warn("legacy_relay_attachment_unsupported", {
+    roomId: normalizeRoomIdValue(roomId || attachment?.roomId || roomState?.id),
+    messageId: String(attachment?.messageId || "").trim(),
+    attachmentId: String(attachment?.id || "").trim(),
+    transport: String(attachment?.transport || "").trim(),
+  });
+}
+
 async function downloadRelayV2Attachment(attachment, roomId) {
   const candidateRoomIds = Array.from(
     new Set(
@@ -6302,11 +6307,7 @@ function createChatAttachmentElement(attachment, messageId = "", roomId = "") {
           attachmentRoomId
         );
       } else {
-        void requestRelayAttachmentFromPeers(
-          attachmentRoomId,
-          attachmentMessageId,
-          attachment
-        );
+        reportLegacyRelayAttachmentUnsupported(attachment, attachmentRoomId);
       }
     });
     wrapper.appendChild(button);
@@ -12756,11 +12757,11 @@ socket.on("relay-attachment-request", ({ roomId, requestId, requesterId, attachm
   if (normalizeRoomIdValue(roomState?.id) !== normalizeRoomIdValue(roomId)) {
     return;
   }
-  void respondRelayAttachmentRequest({
-    roomId,
-    requestId,
-    requesterId,
-    attachmentRef,
+  console.warn("legacy_relay_attachment_request_ignored", {
+    roomId: normalizeRoomIdValue(roomId),
+    requestId: String(requestId || "").trim(),
+    requesterId: String(requesterId || "").trim(),
+    attachmentId: String(attachmentRef?.attachmentId || "").trim(),
   });
 });
 
@@ -12771,7 +12772,12 @@ socket.on("relay-attachment-response", (payload = {}) => {
   if (normalizeRoomIdValue(roomState?.id) !== normalizeRoomIdValue(payload.roomId)) {
     return;
   }
-  void handleRelayAttachmentResponse(payload);
+  console.warn("legacy_relay_attachment_response_ignored", {
+    roomId: normalizeRoomIdValue(payload.roomId),
+    requestId: String(payload?.requestId || "").trim(),
+    sourceId: String(payload?.sourceId || "").trim(),
+    error: String(payload?.error || "").trim(),
+  });
 });
 
 socket.on("chat-error", ({ message } = {}) => {

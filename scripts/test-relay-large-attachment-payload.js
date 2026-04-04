@@ -127,13 +127,16 @@ async function main() {
       ),
     ]);
 
-    const receiverChatPromise = waitForEvent(receiver, "chat-message", {
-      timeoutMs: 15000,
-      predicate: (payload) => payload?.envelope?.messageId === messageId,
+    let receiverSawRejectedMessage = false;
+    receiver.on("chat-message", (payload) => {
+      if (payload?.envelope?.messageId === messageId) {
+        receiverSawRejectedMessage = true;
+      }
     });
-    const senderChatPromise = waitForEvent(sender, "chat-message", {
+    const senderChatErrorPromise = waitForEvent(sender, "chat-error", {
       timeoutMs: 15000,
-      predicate: (payload) => payload?.envelope?.messageId === messageId,
+      predicate: (payload) =>
+        String(payload?.message || "").includes("Legacy relay attachment payloads are no longer supported."),
     });
 
     sender.emit("chat-message", {
@@ -169,40 +172,24 @@ async function main() {
       ],
     });
 
-    const [receiverPayload, senderPayload] = await Promise.all([
-      receiverChatPromise,
-      senderChatPromise,
-    ]);
-    assert.ok(receiverPayload?.envelope, "receiver should get relay envelope");
-    assert.equal(receiverPayload.envelope.messageId, messageId);
-    assert.ok(Array.isArray(receiverPayload.attachmentPayloads));
+    const senderErrorPayload = await senderChatErrorPromise;
+    assert.ok(senderErrorPayload, "sender should receive chat-error for legacy payloads");
+    await new Promise((resolve) => setTimeout(resolve, 1200));
     assert.equal(
-      receiverPayload.attachmentPayloads.length,
-      0,
-      "receiver should not get large inline attachment payloads"
-    );
-
-    assert.ok(senderPayload?.envelope, "sender should get relay envelope echo");
-    assert.equal(senderPayload.envelope.messageId, messageId);
-    assert.ok(Array.isArray(senderPayload.attachmentPayloads));
-    assert.equal(senderPayload.attachmentPayloads.length, 1);
-
-    const receivedAttachmentPayload = senderPayload.attachmentPayloads[0];
-    assert.equal(receivedAttachmentPayload.attachmentId, attachmentId);
-    assert.equal(receivedAttachmentPayload.messageId, messageId);
-    assert.equal(
-      String(receivedAttachmentPayload.ciphertext || "").length,
-      largeCiphertext.length,
-      "sender echo should preserve full relay attachment ciphertext"
+      receiverSawRejectedMessage,
+      false,
+      "receiver should not get relay message when legacy payload is rejected"
     );
 
     assert.equal(
-      senderChatErrors.length,
-      0,
-      `sender should not receive chat-error, got: ${senderChatErrors.join(", ")}`
+      senderChatErrors.some((item) =>
+        String(item || "").includes("Legacy relay attachment payloads are no longer supported.")
+      ),
+      true,
+      "sender should receive explicit legacy payload rejection"
     );
 
-    console.log("PASS: relay large attachment payload is routed safely");
+    console.log("PASS: relay large legacy attachment payload is rejected");
   } finally {
     for (const socket of sockets) {
       try {
@@ -227,7 +214,7 @@ async function main() {
 }
 
 main().catch((error) => {
-  console.error("FAIL: relay large attachment payload is routed safely");
+  console.error("FAIL: relay large legacy attachment payload is rejected");
   console.error(error);
   process.exit(1);
 });

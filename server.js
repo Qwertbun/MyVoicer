@@ -1891,54 +1891,13 @@ io.on("connection", (socket) => {
     if (!room || !room.members.has(socket.id)) {
       return;
     }
-
-    const cachedPayload = getRelayLegacyAttachmentPayload(cleanRoomId, cleanAttachmentRef);
-    if (cachedPayload) {
-      const served = emitRelayAttachmentPayloadFromServer({
-        roomId: cleanRoomId,
-        requestId: cleanRequestId,
-        targetId: socket.id,
-        attachmentRef: cleanAttachmentRef,
-        payload: cachedPayload,
-      });
-      if (served) {
-        console.info("relay_legacy_attachment_cache_hit", {
-          roomId: cleanRoomId,
-          requestId: cleanRequestId,
-          messageId: cleanAttachmentRef.messageId,
-          attachmentId: cleanAttachmentRef.attachmentId,
-          requesterId: socket.id,
-        });
-        return;
-      }
-    }
-
-    if (!room.members.has(cleanTargetId) || !isLocalSocketMember(cleanTargetId)) {
-      console.warn("relay_attachment_request_target_unavailable", {
-        roomId: cleanRoomId,
-        requestId: cleanRequestId,
-        messageId: cleanAttachmentRef.messageId,
-        attachmentId: cleanAttachmentRef.attachmentId,
-        requesterId: socket.id,
-        targetId: cleanTargetId,
-      });
-      io.to(socket.id).emit("relay-attachment-response", {
-        roomId: cleanRoomId,
-        requestId: cleanRequestId,
-        targetId: socket.id,
-        sourceId: cleanTargetId,
-        attachmentRef: cleanAttachmentRef,
-        error: "attachment_source_unavailable",
-      });
-      return;
-    }
-
-    io.to(cleanTargetId).emit("relay-attachment-request", {
+    io.to(socket.id).emit("relay-attachment-response", {
       roomId: cleanRoomId,
       requestId: cleanRequestId,
-      targetId: cleanTargetId,
-      requesterId: socket.id,
+      targetId: socket.id,
+      sourceId: cleanTargetId,
       attachmentRef: cleanAttachmentRef,
+      error: "legacy_attachment_disabled",
     });
   });
 
@@ -1967,59 +1926,18 @@ io.on("connection", (socket) => {
       if (!isLocalSocketMember(cleanTargetId)) {
         return;
       }
-
-      const sanitizedChunk = sanitizeRelayAttachmentChunk(chunk);
       const cleanError = normalizeRelayString(error, 140);
-      if (!sanitizedChunk && !cleanError) {
+      if (!cleanError) {
         return;
       }
-
-      if (!sanitizedChunk && cleanError) {
-        const cachedPayload = getRelayLegacyAttachmentPayload(cleanRoomId, cleanAttachmentRef);
-        if (cachedPayload) {
-          const served = emitRelayAttachmentPayloadFromServer({
-            roomId: cleanRoomId,
-            requestId: cleanRequestId,
-            targetId: cleanTargetId,
-            attachmentRef: cleanAttachmentRef,
-            payload: cachedPayload,
-          });
-          if (served) {
-            console.info("relay_legacy_attachment_cache_recovered_from_peer_error", {
-              roomId: cleanRoomId,
-              requestId: cleanRequestId,
-              messageId: cleanAttachmentRef.messageId,
-              attachmentId: cleanAttachmentRef.attachmentId,
-              targetId: cleanTargetId,
-              sourceId: socket.id,
-              peerError: cleanError,
-            });
-            return;
-          }
-        }
-        console.warn("relay_legacy_attachment_cache_miss_on_peer_error", {
-          roomId: cleanRoomId,
-          requestId: cleanRequestId,
-          messageId: cleanAttachmentRef.messageId,
-          attachmentId: cleanAttachmentRef.attachmentId,
-          targetId: cleanTargetId,
-          sourceId: socket.id,
-          peerError: cleanError,
-        });
-      }
-
-      if (sanitizedChunk && estimatePayloadBytes(sanitizedChunk) > RELAY_MAX_ATTACHMENT_CHUNK_BYTES) {
-        return;
-      }
-
       io.to(cleanTargetId).emit("relay-attachment-response", {
         roomId: cleanRoomId,
         requestId: cleanRequestId,
         targetId: cleanTargetId,
         sourceId: socket.id,
         attachmentRef: cleanAttachmentRef,
-        chunk: sanitizedChunk,
-        error: cleanError || "",
+        chunk: null,
+        error: cleanError,
       });
     }
   );
@@ -2126,55 +2044,44 @@ io.on("connection", (socket) => {
         return;
       }
 
-      const sanitizedAttachmentPayloads = Array.isArray(attachmentPayloads)
-        ? attachmentPayloads
-            .map((item) => sanitizeRelayAttachmentPayload(item))
-            .filter(Boolean)
-            .slice(0, MAX_CHAT_ATTACHMENTS)
+      const hasLegacyAttachmentPayloads = Array.isArray(attachmentPayloads) && attachmentPayloads.length > 0;
+      if (hasLegacyAttachmentPayloads) {
+        socket.emit("chat-error", {
+          message: "Legacy relay attachment payloads are no longer supported.",
+        });
+        return;
+      }
+
+      const attachmentRefs = Array.isArray(sanitizedEnvelope.attachmentRefs)
+        ? sanitizedEnvelope.attachmentRefs
         : [];
-      const hasV2AttachmentRefs = Array.isArray(sanitizedEnvelope.attachmentRefs)
-        && sanitizedEnvelope.attachmentRefs.some(
-          (item) => item?.transport === RELAY_ATTACHMENT_TRANSPORT_S3_V2
-        );
-      const allowedAttachmentIds = new Set(
-        Array.isArray(sanitizedEnvelope.attachmentRefs)
-          ? sanitizedEnvelope.attachmentRefs.map((item) => item.attachmentId)
-          : []
+      const hasLegacyAttachmentRefs = attachmentRefs.some(
+        (item) => item?.transport !== RELAY_ATTACHMENT_TRANSPORT_S3_V2
       );
-      const alignedAttachmentPayloads = hasV2AttachmentRefs
-        ? []
-        : sanitizedAttachmentPayloads.filter((item) => {
-        if (item.messageId !== sanitizedEnvelope.messageId) {
-          return false;
-        }
-        if (allowedAttachmentIds.size > 0 && !allowedAttachmentIds.has(item.attachmentId)) {
-          return false;
-        }
-        return true;
-      });
-      const inlineAttachmentCiphertextLength = alignedAttachmentPayloads.reduce(
-        (acc, item) => acc + String(item?.ciphertext || "").length,
-        0
-      );
-      const attachmentPayloadsForPeers = inlineAttachmentCiphertextLength > 0
-        && inlineAttachmentCiphertextLength <= RELAY_INLINE_ATTACHMENT_BROADCAST_MAX_BYTES
-        ? alignedAttachmentPayloads
-        : [];
-      if (alignedAttachmentPayloads.length > 0) {
-        rememberRelayLegacyAttachmentPayloads(roomId, alignedAttachmentPayloads);
+      if (hasLegacyAttachmentRefs) {
+        socket.emit("chat-error", {
+          message: "Legacy relay attachment references are no longer supported.",
+        });
+        return;
+      }
+      if (attachmentRefs.length > 0 && sanitizedEnvelope.transportVersion !== 2) {
+        socket.emit("chat-error", {
+          message: "Relay attachment transport version is invalid.",
+        });
+        return;
       }
 
       socket.to(roomId).emit("chat-message", {
         roomId,
         sourceId: socket.id,
         envelope: sanitizedEnvelope,
-        attachmentPayloads: attachmentPayloadsForPeers,
+        attachmentPayloads: [],
       });
       io.to(socket.id).emit("chat-message", {
         roomId,
         sourceId: socket.id,
         envelope: sanitizedEnvelope,
-        attachmentPayloads: alignedAttachmentPayloads,
+        attachmentPayloads: [],
       });
       emitWatchedRoomRelayEnvelope(roomId, sanitizedEnvelope, socket.id);
       return;
