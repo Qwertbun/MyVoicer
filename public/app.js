@@ -5930,7 +5930,7 @@ function clearRelayAttachmentRequestTimeout(entry) {
   }
 }
 
-function markRelayAttachmentRequestFailed(requestId) {
+function markRelayAttachmentRequestFailed(requestId, extra = {}) {
   const cleanRequestId = String(requestId || "").trim();
   if (!cleanRequestId) {
     return;
@@ -5948,6 +5948,7 @@ function markRelayAttachmentRequestFailed(requestId) {
     attachmentId: String(entry?.attachmentId || "").trim(),
     activeSourceId: String(entry?.activeSourceId || "").trim(),
     pendingSources: Array.isArray(entry?.pendingSources) ? entry.pendingSources : [],
+    ...(extra && typeof extra === "object" ? extra : {}),
   });
 }
 
@@ -5970,7 +5971,9 @@ function scheduleRelayAttachmentRequestTimeout(requestId) {
       void emitRelayAttachmentRequestForSource(cleanRequestId, nextSourceId);
       return;
     }
-    markRelayAttachmentRequestFailed(cleanRequestId);
+    markRelayAttachmentRequestFailed(cleanRequestId, {
+      reasonCode: "peer_request_timeout",
+    });
   }, RELAY_ATTACHMENT_REQUEST_TIMEOUT_MS);
 }
 
@@ -5979,7 +5982,10 @@ async function emitRelayAttachmentRequestForSource(requestId, sourceId) {
   const cleanSourceId = String(sourceId || "").trim();
   const entry = relayAttachmentRequestMap.get(cleanRequestId);
   if (!entry || !cleanSourceId) {
-    markRelayAttachmentRequestFailed(cleanRequestId);
+    markRelayAttachmentRequestFailed(cleanRequestId, {
+      reasonCode: "peer_request_emit_invalid",
+      sourceId: cleanSourceId,
+    });
     return false;
   }
 
@@ -6206,13 +6212,23 @@ async function handleRelayAttachmentResponse(payload) {
   }
 
   if (payload?.error) {
+    console.error("relay_attachment_response_error", {
+      requestId: cleanRequestId,
+      sourceId: cleanSourceId,
+      targetId: cleanTargetId,
+      error: String(payload.error || ""),
+    });
     clearRelayAttachmentRequestTimeout(entry);
     const nextSourceId = Array.isArray(entry.pendingSources) ? entry.pendingSources.shift() : "";
     if (nextSourceId) {
       await emitRelayAttachmentRequestForSource(cleanRequestId, nextSourceId);
       return;
     }
-    markRelayAttachmentRequestFailed(cleanRequestId);
+    markRelayAttachmentRequestFailed(cleanRequestId, {
+      reasonCode: "peer_response_error",
+      peerError: String(payload.error || ""),
+      sourceId: cleanSourceId,
+    });
     return;
   }
 
@@ -6271,6 +6287,15 @@ function createChatAttachmentElement(attachment, messageId = "", roomId = "") {
     button.addEventListener("click", () => {
       const attachmentRoomId = normalizeRoomIdValue(attachment.roomId || roomId || roomState?.id);
       const attachmentMessageId = String(messageId || attachment.messageId || "").trim();
+      console.info("attachment_download_click", {
+        roomId: attachmentRoomId,
+        messageId: attachmentMessageId,
+        attachmentId: String(attachment?.id || "").trim(),
+        transport: String(attachment?.transport || "").trim(),
+        hasObjectKey: Boolean(String(attachment?.objectKey || "").trim()),
+        hasFileKey: Boolean(String(attachment?.fileKey || "").trim()),
+        hasNoncePrefix: Boolean(String(attachment?.noncePrefix || "").trim()),
+      });
       if (attachment.transport === RELAY_ATTACHMENT_TRANSPORT_S3_V2) {
         void downloadRelayV2Attachment(
           attachment,
