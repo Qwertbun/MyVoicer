@@ -322,7 +322,7 @@ const I18N = {
     roomKeyUpdateFailed: "Unable to update room key.",
     attachmentSourceUnavailable: "Attachment source is unavailable.",
     legacyRelayAttachmentUnsupported: "Legacy encrypted attachment is no longer supported. Ask the sender to re-upload the file.",
-    legacyRelayAttachmentButton: "Legacy attachment unavailable",
+    legacyRelayAttachmentButton: "Request re-upload",
     encryptedAttachment: "Encrypted attachment",
     downloadEncryptedAttachment: "Download encrypted attachment",
     relayHistorySyncing: "Syncing encrypted history...",
@@ -578,7 +578,7 @@ const I18N = {
     roomKeyUpdateFailed: "Не удалось обновить ключ комнаты.",
     attachmentSourceUnavailable: "Источник вложения недоступен.",
     legacyRelayAttachmentUnsupported: "Старые шифрованные вложения больше не поддерживаются. Попросите отправителя загрузить файл заново.",
-    legacyRelayAttachmentButton: "Старое вложение недоступно",
+    legacyRelayAttachmentButton: "Запросить файл заново",
     encryptedAttachment: "Шифрованное вложение",
     downloadEncryptedAttachment: "Скачать шифрованное вложение",
     relayHistorySyncing: "Синхронизация шифрованной истории...",
@@ -6318,7 +6318,7 @@ function createChatAttachmentElement(attachment, messageId = "", roomId = "") {
     button.dataset.attachmentId = String(attachment?.id || "").trim();
     button.dataset.messageId = String(messageId || attachment?.messageId || "").trim();
     if (!isRelayV2Attachment) {
-      button.disabled = true;
+      button.classList.add("chat-attachment-legacy-btn");
       button.title = t("legacyRelayAttachmentUnsupported");
     }
     button.addEventListener("click", () => {

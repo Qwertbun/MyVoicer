@@ -3104,6 +3104,29 @@ button.chat-attachment-file-link[data-transport="legacy"] {
   color: var(--text-soft);
 }
 
+button.chat-attachment-file-link.chat-attachment-legacy-btn {
+  width: calc(100% - 20px);
+  justify-content: center;
+  border-color: color-mix(in srgb, var(--accent) 52%, transparent);
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--accent) 26%, var(--surface-soft)) 0%,
+      color-mix(in srgb, var(--accent) 14%, var(--surface-soft)) 100%
+    );
+  color: color-mix(in srgb, var(--text) 96%, white 4%);
+  font-weight: 600;
+}
+
+button.chat-attachment-file-link.chat-attachment-legacy-btn:hover {
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--accent) 34%, var(--surface-soft)) 0%,
+      color-mix(in srgb, var(--accent) 18%, var(--surface-soft)) 100%
+    );
+}
+
 button.chat-attachment-file-link:disabled,
 button.chat-attachment-file-link[data-transport="legacy"]:disabled {
   cursor: not-allowed;
