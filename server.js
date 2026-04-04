@@ -49,6 +49,10 @@ const RELAY_MAX_ATTACHMENT_PAYLOAD_CIPHERTEXT_BYTES = SOCKET_MAX_HTTP_BUFFER_SIZ
 const RELAY_MAX_ATTACHMENT_CHUNK_TEXT_BYTES = 12 * 1024 * 1024;
 const RELAY_INLINE_ATTACHMENT_BROADCAST_MAX_BYTES = 2 * 1024 * 1024;
 const RELAY_ATTACHMENT_TRANSPORT_S3_V2 = "s3-v2";
+const RELAY_LEGACY_ATTACHMENT_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+const RELAY_LEGACY_ATTACHMENT_CACHE_MAX_ENTRIES = 64;
+const RELAY_LEGACY_ATTACHMENT_CACHE_MAX_BYTES = 256 * 1024 * 1024;
+const RELAY_SERVER_ATTACHMENT_CHUNK_TEXT_BYTES = 512 * 1024;
 const CHAT_MIME_EXTENSION_FALLBACKS = Object.freeze({
   "image/jpeg": "jpg",
   "image/png": "png",
@@ -71,6 +75,8 @@ let chatStateSaveChain = Promise.resolve();
 let p2pMesh = null;
 let createP2PMesh = null;
 let relayUploadsManager = null;
+let relayLegacyAttachmentCacheBytes = 0;
+const relayLegacyAttachmentCache = new Map();
 
 app.use(express.json({ limit: "256kb" }));
 app.use(express.static(PUBLIC_ROOT));
@@ -1477,6 +1483,177 @@ function sanitizeRelayAttachmentPayload(value = {}) {
   };
 }
 
+function estimateRelayLegacyAttachmentEntryBytes(entry = {}) {
+  return Buffer.byteLength(String(entry?.ciphertext || ""), "utf8")
+    + Buffer.byteLength(String(entry?.iv || ""), "utf8")
+    + Buffer.byteLength(String(entry?.name || ""), "utf8")
+    + Buffer.byteLength(String(entry?.mimeType || ""), "utf8")
+    + 256;
+}
+
+function buildRelayLegacyAttachmentCacheKey(roomId, messageId, attachmentId) {
+  return `${normalizeRelayRoomId(roomId)}:${normalizeRelayString(messageId, 96)}:${normalizeRelayString(attachmentId, 96)}`;
+}
+
+function deleteRelayLegacyAttachmentCacheKey(key) {
+  const cleanKey = String(key || "").trim();
+  if (!cleanKey || !relayLegacyAttachmentCache.has(cleanKey)) {
+    return;
+  }
+  const existing = relayLegacyAttachmentCache.get(cleanKey);
+  relayLegacyAttachmentCache.delete(cleanKey);
+  relayLegacyAttachmentCacheBytes = Math.max(
+    0,
+    relayLegacyAttachmentCacheBytes - (Number(existing?.approxBytes) || 0)
+  );
+}
+
+function pruneRelayLegacyAttachmentCache() {
+  if (relayLegacyAttachmentCache.size === 0) {
+    return;
+  }
+
+  const now = Date.now();
+  for (const [key, entry] of relayLegacyAttachmentCache.entries()) {
+    if (!entry || !Number.isFinite(entry.storedAt) || now - entry.storedAt > RELAY_LEGACY_ATTACHMENT_CACHE_TTL_MS) {
+      deleteRelayLegacyAttachmentCacheKey(key);
+    }
+  }
+
+  while (
+    relayLegacyAttachmentCache.size > RELAY_LEGACY_ATTACHMENT_CACHE_MAX_ENTRIES
+    || relayLegacyAttachmentCacheBytes > RELAY_LEGACY_ATTACHMENT_CACHE_MAX_BYTES
+  ) {
+    const oldestKey = relayLegacyAttachmentCache.keys().next().value;
+    if (!oldestKey) {
+      break;
+    }
+    deleteRelayLegacyAttachmentCacheKey(oldestKey);
+  }
+}
+
+function rememberRelayLegacyAttachmentPayload(roomId, payload) {
+  const cleanRoomId = normalizeRelayRoomId(roomId);
+  const normalizedPayload = sanitizeRelayAttachmentPayload(payload);
+  if (!cleanRoomId || !normalizedPayload) {
+    return;
+  }
+  const cacheKey = buildRelayLegacyAttachmentCacheKey(
+    cleanRoomId,
+    normalizedPayload.messageId,
+    normalizedPayload.attachmentId
+  );
+  if (!cacheKey) {
+    return;
+  }
+
+  const approxBytes = estimateRelayLegacyAttachmentEntryBytes(normalizedPayload);
+  deleteRelayLegacyAttachmentCacheKey(cacheKey);
+  relayLegacyAttachmentCache.set(cacheKey, {
+    ...normalizedPayload,
+    roomId: cleanRoomId,
+    storedAt: Date.now(),
+    approxBytes,
+  });
+  relayLegacyAttachmentCacheBytes += approxBytes;
+  pruneRelayLegacyAttachmentCache();
+}
+
+function rememberRelayLegacyAttachmentPayloads(roomId, payloads = []) {
+  if (!Array.isArray(payloads) || payloads.length === 0) {
+    return;
+  }
+  for (const payload of payloads) {
+    rememberRelayLegacyAttachmentPayload(roomId, payload);
+  }
+}
+
+function getRelayLegacyAttachmentPayload(roomId, attachmentRef) {
+  const cleanRoomId = normalizeRelayRoomId(roomId);
+  const cleanMessageId = normalizeRelayString(attachmentRef?.messageId, 96);
+  const cleanAttachmentId = normalizeRelayString(attachmentRef?.attachmentId, 96);
+  if (!cleanRoomId || !cleanMessageId || !cleanAttachmentId) {
+    return null;
+  }
+
+  pruneRelayLegacyAttachmentCache();
+  const cacheKey = buildRelayLegacyAttachmentCacheKey(cleanRoomId, cleanMessageId, cleanAttachmentId);
+  const entry = relayLegacyAttachmentCache.get(cacheKey);
+  if (!entry) {
+    return null;
+  }
+
+  if (!Number.isFinite(entry.storedAt) || Date.now() - entry.storedAt > RELAY_LEGACY_ATTACHMENT_CACHE_TTL_MS) {
+    deleteRelayLegacyAttachmentCacheKey(cacheKey);
+    return null;
+  }
+
+  const refreshed = {
+    ...entry,
+    storedAt: Date.now(),
+  };
+  relayLegacyAttachmentCache.delete(cacheKey);
+  relayLegacyAttachmentCache.set(cacheKey, refreshed);
+  return refreshed;
+}
+
+function splitRelayCiphertextForServerResponse(ciphertext) {
+  const cleanCiphertext = String(ciphertext || "");
+  if (!cleanCiphertext) {
+    return [];
+  }
+  const chunks = [];
+  for (let offset = 0; offset < cleanCiphertext.length; offset += RELAY_SERVER_ATTACHMENT_CHUNK_TEXT_BYTES) {
+    chunks.push(cleanCiphertext.slice(offset, offset + RELAY_SERVER_ATTACHMENT_CHUNK_TEXT_BYTES));
+  }
+  return chunks;
+}
+
+function emitRelayAttachmentPayloadFromServer({
+  roomId,
+  requestId,
+  targetId,
+  attachmentRef,
+  payload,
+}) {
+  const cleanRoomId = normalizeRelayRoomId(roomId);
+  const cleanRequestId = normalizeRelayString(requestId, 96);
+  const cleanTargetId = normalizeRelayString(targetId, 96);
+  const cleanAttachmentRef = sanitizeRelayAttachmentRef(attachmentRef);
+  const normalizedPayload = sanitizeRelayAttachmentPayload(payload);
+  if (!cleanRoomId || !cleanRequestId || !cleanTargetId || !cleanAttachmentRef || !normalizedPayload) {
+    return false;
+  }
+
+  const chunks = splitRelayCiphertextForServerResponse(normalizedPayload.ciphertext);
+  if (chunks.length === 0) {
+    return false;
+  }
+
+  const totalChunks = chunks.length;
+  for (let index = 0; index < chunks.length; index += 1) {
+    io.to(cleanTargetId).emit("relay-attachment-response", {
+      roomId: cleanRoomId,
+      requestId: cleanRequestId,
+      targetId: cleanTargetId,
+      sourceId: "relay-server",
+      attachmentRef: cleanAttachmentRef,
+      chunk: {
+        chunk: chunks[index],
+        chunkIndex: index,
+        totalChunks,
+        eof: index === chunks.length - 1,
+        iv: normalizedPayload.iv,
+        name: normalizedPayload.name,
+        mimeType: normalizedPayload.mimeType,
+        size: normalizedPayload.size,
+      },
+      error: "",
+    });
+  }
+  return true;
+}
+
 function sanitizeRelayAttachmentChunk(value = {}) {
   if (!value || typeof value !== "object") {
     return null;
@@ -1715,6 +1892,19 @@ io.on("connection", (socket) => {
       return;
     }
     if (!room.members.has(cleanTargetId) || !isLocalSocketMember(cleanTargetId)) {
+      const cachedPayload = getRelayLegacyAttachmentPayload(cleanRoomId, cleanAttachmentRef);
+      if (cachedPayload) {
+        const served = emitRelayAttachmentPayloadFromServer({
+          roomId: cleanRoomId,
+          requestId: cleanRequestId,
+          targetId: socket.id,
+          attachmentRef: cleanAttachmentRef,
+          payload: cachedPayload,
+        });
+        if (served) {
+          return;
+        }
+      }
       io.to(socket.id).emit("relay-attachment-response", {
         roomId: cleanRoomId,
         requestId: cleanRequestId,
@@ -1765,6 +1955,22 @@ io.on("connection", (socket) => {
       const cleanError = normalizeRelayString(error, 140);
       if (!sanitizedChunk && !cleanError) {
         return;
+      }
+
+      if (!sanitizedChunk && cleanError) {
+        const cachedPayload = getRelayLegacyAttachmentPayload(cleanRoomId, cleanAttachmentRef);
+        if (cachedPayload) {
+          const served = emitRelayAttachmentPayloadFromServer({
+            roomId: cleanRoomId,
+            requestId: cleanRequestId,
+            targetId: cleanTargetId,
+            attachmentRef: cleanAttachmentRef,
+            payload: cachedPayload,
+          });
+          if (served) {
+            return;
+          }
+        }
       }
 
       if (sanitizedChunk && estimatePayloadBytes(sanitizedChunk) > RELAY_MAX_ATTACHMENT_CHUNK_BYTES) {
@@ -1919,6 +2125,9 @@ io.on("connection", (socket) => {
         && inlineAttachmentCiphertextLength <= RELAY_INLINE_ATTACHMENT_BROADCAST_MAX_BYTES
         ? alignedAttachmentPayloads
         : [];
+      if (alignedAttachmentPayloads.length > 0) {
+        rememberRelayLegacyAttachmentPayloads(roomId, alignedAttachmentPayloads);
+      }
 
       socket.to(roomId).emit("chat-message", {
         roomId,
