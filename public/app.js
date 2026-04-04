@@ -120,7 +120,7 @@ const DEFAULT_RTC_CONFIG = {
   iceTransportPolicy: "all",
 };
 const PROJECT_NAME = "synto";
-const APP_BUILD_ID = "20260404-relay-v2trace7";
+const APP_BUILD_ID = "20260404-relay-v2inline8";
 const DEFAULT_MIC_AUDIO_PROCESSING_CONSTRAINTS = {
   echoCancellation: true,
   noiseSuppression: true,
@@ -204,6 +204,8 @@ const RELAY_HISTORY_REPLAY_MAX_BYTES = 64 * 1024 * 1024;
 const RELAY_ATTACHMENT_CHUNK_SIZE = 256 * 1024;
 const RELAY_ATTACHMENT_REQUEST_TIMEOUT_MS = 30000;
 const RELAY_INLINE_ATTACHMENT_EMIT_MAX_BYTES = 2 * 1024 * 1024;
+const RELAY_INLINE_PREVIEW_MAX_BYTES = 32 * 1024 * 1024;
+const RELAY_INLINE_PREVIEW_RETRY_COOLDOWN_MS = 30 * 1000;
 const RELAY_V2_UPLOAD_CHUNK_SIZE_BYTES = 16 * 1024 * 1024;
 const RELAY_V2_MAX_FILE_BYTES = 10 * 1024 * 1024 * 1024;
 const RELAY_V2_MAX_TOTAL_MESSAGE_BYTES = 10 * 1024 * 1024 * 1024;
@@ -1204,6 +1206,8 @@ const relayMessageEnvelopeCache = new Map();
 const relayAttachmentSourceMap = new Map();
 const relayAttachmentRequestMap = new Map();
 const relayLocalAttachmentPreviewCache = new Map();
+const relayV2InlinePreviewInFlight = new Map();
+const relayV2InlinePreviewFailedAt = new Map();
 let relayCapabilityToken = "";
 let relayCapabilityTokenExpiresAt = 0;
 let relayCapabilityRoomId = "";
@@ -2257,6 +2261,7 @@ function releaseRelayLocalAttachmentPreviewEntry(key) {
   if (!cleanKey) {
     return;
   }
+  relayV2InlinePreviewFailedAt.delete(cleanKey);
   const entry = relayLocalAttachmentPreviewCache.get(cleanKey);
   if (!entry) {
     return;
@@ -6154,6 +6159,149 @@ async function downloadRelayV2Attachment(attachment, roomId) {
   );
 }
 
+function canAttemptRelayInlinePreview(attachment) {
+  const previewKind = String(attachment?.previewKind || "").trim().toLowerCase();
+  if (previewKind !== "image" && previewKind !== "video") {
+    return false;
+  }
+  const size = Number(attachment?.size);
+  if (Number.isFinite(size) && size > RELAY_INLINE_PREVIEW_MAX_BYTES) {
+    return false;
+  }
+  return true;
+}
+
+async function hydrateRelayV2AttachmentInlinePreview(attachment, messageId = "", roomId = "") {
+  if (!attachment || attachment.url || !canAttemptRelayInlinePreview(attachment)) {
+    return false;
+  }
+
+  const attachmentId = String(attachment.id || "").trim();
+  const cleanMessageId = String(messageId || attachment.messageId || "").trim();
+  const candidateRoomIds = Array.from(
+    new Set(
+      [attachment.roomId, roomId, roomState?.id]
+        .map((value) => normalizeRoomIdValue(value))
+        .filter(Boolean)
+    )
+  );
+  const cleanRoomId = candidateRoomIds[0] || "";
+  const previewKey = buildRelayLocalAttachmentPreviewKey(cleanRoomId, cleanMessageId, attachmentId);
+  if (!previewKey || !attachmentId || !cleanMessageId) {
+    return false;
+  }
+
+  const failedAt = Number(relayV2InlinePreviewFailedAt.get(previewKey));
+  if (Number.isFinite(failedAt)) {
+    if (Date.now() - failedAt < RELAY_INLINE_PREVIEW_RETRY_COOLDOWN_MS) {
+      return false;
+    }
+    relayV2InlinePreviewFailedAt.delete(previewKey);
+  }
+
+  if (relayV2InlinePreviewInFlight.has(previewKey)) {
+    return relayV2InlinePreviewInFlight.get(previewKey);
+  }
+
+  const task = (async () => {
+    const transport = String(attachment.transport || "").trim().toLowerCase();
+    const objectKey = String(attachment.objectKey || "").trim();
+    const hasChunkCryptoMeta = (
+      String(attachment.fileKey || "").trim()
+      && String(attachment.noncePrefix || "").trim()
+      && Number(attachment.chunkSize) > 0
+      && Number(attachment.totalChunks) > 0
+    );
+    if (transport !== RELAY_ATTACHMENT_TRANSPORT_S3_V2 || !objectKey || !hasChunkCryptoMeta || candidateRoomIds.length === 0) {
+      return false;
+    }
+
+    let lastError = null;
+    for (const candidateRoomId of candidateRoomIds) {
+      try {
+        const payload = await relayV2GetDownloadUrl(candidateRoomId, objectKey);
+        const response = await fetch(payload.url, {
+          method: "GET",
+        });
+        if (!response.ok) {
+          throw new Error(`relay_v2_inline_preview_download_${response.status}`);
+        }
+
+        const chunks = [];
+        await decryptRelayV2AttachmentResponse(
+          response,
+          attachment,
+          async (chunk) => {
+            chunks.push(chunk);
+          },
+          null
+        );
+
+        const blob = new Blob(chunks, {
+          type: normalizeChatAttachmentMimeType(attachment?.mimeType),
+        });
+        const previewEntry = rememberRelayLocalAttachmentPreview(
+          candidateRoomId,
+          cleanMessageId,
+          attachmentId,
+          blob,
+          {
+            name: attachment.name,
+            mimeType: attachment.mimeType,
+            size: attachment.size,
+          }
+        );
+        if (!previewEntry?.url) {
+          throw new Error("relay_v2_inline_preview_cache_failed");
+        }
+
+        attachment.url = previewEntry.url;
+        attachment.roomId = candidateRoomId;
+        attachment.previewKind = previewEntry.previewKind || getChatAttachmentPreviewKind(previewEntry.mimeType);
+        relayV2InlinePreviewFailedAt.delete(previewKey);
+
+        const normalizedMessage = getChatMessageById(cleanMessageId);
+        if (normalizedMessage && Array.isArray(normalizedMessage.attachments)) {
+          const target = normalizedMessage.attachments.find((item) => String(item?.id || "").trim() === attachmentId);
+          if (target && target !== attachment) {
+            target.url = attachment.url;
+            target.roomId = attachment.roomId;
+            target.previewKind = attachment.previewKind;
+          }
+        }
+
+        renderChat();
+        return true;
+      } catch (error) {
+        lastError = error;
+      }
+    }
+
+    relayV2InlinePreviewFailedAt.set(previewKey, Date.now());
+    console.warn("relay_v2_inline_preview_failed", {
+      roomId: cleanRoomId,
+      messageId: cleanMessageId,
+      attachmentId,
+      transport: String(attachment.transport || "").trim(),
+      hasObjectKey: Boolean(objectKey),
+      hasFileKey: Boolean(String(attachment.fileKey || "").trim()),
+      hasNoncePrefix: Boolean(String(attachment.noncePrefix || "").trim()),
+      chunkSize: Number(attachment.chunkSize) || 0,
+      totalChunks: Number(attachment.totalChunks) || 0,
+      previewKind: String(attachment.previewKind || ""),
+      error: String(lastError?.message || lastError || ""),
+    });
+    return false;
+  })();
+
+  relayV2InlinePreviewInFlight.set(previewKey, task);
+  try {
+    return await task;
+  } finally {
+    relayV2InlinePreviewInFlight.delete(previewKey);
+  }
+}
+
 function splitRelayCiphertextToChunks(ciphertext, chunkSize = RELAY_ATTACHMENT_CHUNK_SIZE) {
   const cleanCiphertext = String(ciphertext || "");
   if (!cleanCiphertext) {
@@ -6664,6 +6812,16 @@ function createChatAttachmentElement(attachment, messageId = "", roomId = "") {
 
   if (attachment.encrypted && !attachment.url) {
     const isRelayV2Attachment = canTreatAttachmentAsRelayV2(attachment, messageId, roomId);
+    const canInlinePreview = isRelayV2Attachment && canAttemptRelayInlinePreview(attachment);
+    if (canInlinePreview) {
+      const attachmentRoomId = normalizeRoomIdValue(attachment.roomId || roomId || roomState?.id);
+      const attachmentMessageId = String(messageId || attachment.messageId || "").trim();
+      void hydrateRelayV2AttachmentInlinePreview(
+        attachment,
+        attachmentMessageId,
+        attachmentRoomId
+      );
+    }
     const button = document.createElement("button");
     button.type = "button";
     button.className = "chat-attachment-file-link";
@@ -7712,6 +7870,8 @@ function removeChatMessageById(messageId) {
 
 function replaceChatMessages(messages) {
   clearAllRelayLocalAttachmentPreviews();
+  relayV2InlinePreviewInFlight.clear();
+  relayV2InlinePreviewFailedAt.clear();
   resetChatEditState();
   chatMessages.length = 0;
   chatMessageIds.clear();
