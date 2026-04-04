@@ -5811,8 +5811,14 @@ async function saveRelayV2AttachmentViaBlob(response, attachment) {
 }
 
 async function downloadRelayV2Attachment(attachment, roomId) {
-  const cleanRoomId = normalizeRoomIdValue(roomId || attachment?.roomId || roomState?.id);
-  if (!cleanRoomId) {
+  const candidateRoomIds = Array.from(
+    new Set(
+      [attachment?.roomId, roomId, roomState?.id]
+        .map((value) => normalizeRoomIdValue(value))
+        .filter(Boolean)
+    )
+  );
+  if (candidateRoomIds.length === 0) {
     setStatus(t("attachmentSourceUnavailable"));
     return;
   }
@@ -5822,27 +5828,36 @@ async function downloadRelayV2Attachment(attachment, roomId) {
     return;
   }
 
-  try {
-    const payload = await relayV2GetDownloadUrl(cleanRoomId, objectKey);
-    const response = await fetch(payload.url, {
-      method: "GET",
-    });
-    if (!response.ok) {
-      throw new Error(`relay_v2_download_${response.status}`);
-    }
-
+  let lastError = null;
+  for (const candidateRoomId of candidateRoomIds) {
     try {
-      const savedByFsApi = await saveRelayV2AttachmentViaFileSystemApi(response.clone(), attachment);
-      if (!savedByFsApi) {
+      const payload = await relayV2GetDownloadUrl(candidateRoomId, objectKey);
+      const response = await fetch(payload.url, {
+        method: "GET",
+      });
+      if (!response.ok) {
+        throw new Error(`relay_v2_download_${response.status}`);
+      }
+
+      try {
+        const savedByFsApi = await saveRelayV2AttachmentViaFileSystemApi(response.clone(), attachment);
+        if (!savedByFsApi) {
+          await saveRelayV2AttachmentViaBlob(response, attachment);
+        }
+      } catch (error) {
         await saveRelayV2AttachmentViaBlob(response, attachment);
       }
-    } catch {
-      await saveRelayV2AttachmentViaBlob(response, attachment);
+      setStatus(`${attachment.name} downloaded`);
+      return;
+    } catch (error) {
+      lastError = error;
     }
-    setStatus(`${attachment.name} downloaded`);
-  } catch {
-    setStatus(t("attachmentSourceUnavailable"));
   }
+
+  if (lastError) {
+    console.warn("relay_v2_download_failed", lastError);
+  }
+  setStatus(t("attachmentSourceUnavailable"));
 }
 
 function splitRelayCiphertextToChunks(ciphertext, chunkSize = RELAY_ATTACHMENT_CHUNK_SIZE) {
@@ -6182,15 +6197,17 @@ function createChatAttachmentElement(attachment, messageId = "", roomId = "") {
     button.textContent = t("downloadEncryptedAttachment");
     button.setAttribute("aria-label", t("downloadEncryptedAttachment"));
     button.addEventListener("click", () => {
+      const attachmentRoomId = normalizeRoomIdValue(attachment.roomId || roomId || roomState?.id);
+      const attachmentMessageId = String(messageId || attachment.messageId || "").trim();
       if (attachment.transport === RELAY_ATTACHMENT_TRANSPORT_S3_V2) {
         void downloadRelayV2Attachment(
           attachment,
-          normalizeRoomIdValue(roomId || attachment.roomId || roomState?.id)
+          attachmentRoomId
         );
       } else {
         void requestRelayAttachmentFromPeers(
-          normalizeRoomIdValue(roomId || attachment.roomId || roomState?.id),
-          String(messageId || attachment.messageId || "").trim(),
+          attachmentRoomId,
+          attachmentMessageId,
           attachment
         );
       }
@@ -6987,7 +7004,7 @@ function createChatMessageElement(message) {
         createChatAttachmentsElement(
           message.attachments,
           message.id,
-          normalizeRoomIdValue(roomState?.id || message.roomId)
+          normalizeRoomIdValue(message.roomId || roomState?.id)
         )
       );
     }

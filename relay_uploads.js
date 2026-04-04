@@ -380,7 +380,7 @@ function createRelayUploadsManager({
 
   function parseCapabilityFromRequest(req) {
     const authHeader = String(req.headers?.authorization || "").trim();
-    const bearerMatch = /^bearer\\s+(.+)$/i.exec(authHeader);
+    const bearerMatch = /^bearer\s+(.+)$/i.exec(authHeader);
     const queryToken = normalizeRelayString(req.query?.capability, 4096);
     const bodyToken = normalizeRelayString(req.body?.capability, 4096);
     const token = normalizeRelayString(
