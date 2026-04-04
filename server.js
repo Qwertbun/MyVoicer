@@ -2657,7 +2657,9 @@ function startServer(options = {}) {
       console.log(`Voice messenger started on ${protocol}://${displayHost}:${actualPort}`);
       console.log(`Network mode: ${NETWORK_MODE}`);
       if (RELAY_MODE_ENABLED) {
-        console.log("Relay mode: server does not persist chat history/uploads on disk.");
+        console.log(
+          `Relay mode: chat history is not persisted on server; upload provider=${relayUploadsManager?.provider || "unknown"}.`
+        );
       }
       console.log(
         `ICE config: ${countUrls(iceConfig.iceServers)} url(s), TURN ${

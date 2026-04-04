@@ -1,6 +1,8 @@
 "use strict";
 
 const crypto = require("crypto");
+const fs = require("fs");
+const path = require("path");
 
 let S3Client = null;
 let CreateMultipartUploadCommand = null;
@@ -209,6 +211,16 @@ function createRelayUploadsManager({
         forcePathStyle: s3UsePathStyle,
       })
     : null;
+  const relayObjectsRoot = process.env.RELAY_OBJECTS_ROOT
+    ? path.resolve(String(process.env.RELAY_OBJECTS_ROOT))
+    : path.resolve(path.join(process.cwd(), "data", "relay-objects"));
+  if (relayModeEnabled && !useS3) {
+    try {
+      fs.mkdirSync(relayObjectsRoot, { recursive: true });
+    } catch {
+      // no-op
+    }
+  }
 
   const uploadSessions = new Map();
   const memoryObjects = new Map();
@@ -465,6 +477,84 @@ function createRelayUploadsManager({
     return cleanObjectKey.startsWith(expectedPrefix) && !cleanObjectKey.includes("..");
   }
 
+  function resolveDiskObjectPath(objectKey) {
+    const cleanObjectKey = normalizeRelayString(objectKey, 512);
+    if (!cleanObjectKey) {
+      return "";
+    }
+    const root = path.resolve(relayObjectsRoot);
+    const candidatePath = path.resolve(path.join(root, cleanObjectKey));
+    if (candidatePath !== root && !candidatePath.startsWith(`${root}${path.sep}`)) {
+      return "";
+    }
+    return candidatePath;
+  }
+
+  function resolveDiskObjectMetaPath(objectPath) {
+    const cleanObjectPath = String(objectPath || "").trim();
+    if (!cleanObjectPath) {
+      return "";
+    }
+    return `${cleanObjectPath}.meta.json`;
+  }
+
+  async function loadDiskObjectEntry(roomId, objectKey) {
+    if (useS3) {
+      return null;
+    }
+    const cleanRoomId = normalizeRoomIdValue(roomId);
+    const cleanObjectKey = normalizeRelayString(objectKey, 512);
+    if (!cleanRoomId || !cleanObjectKey) {
+      return null;
+    }
+    const objectPath = resolveDiskObjectPath(cleanObjectKey);
+    if (!objectPath) {
+      return null;
+    }
+
+    let stat = null;
+    try {
+      stat = await fs.promises.stat(objectPath);
+    } catch {
+      return null;
+    }
+    if (!stat || !stat.isFile()) {
+      return null;
+    }
+
+    let metadata = {};
+    const metadataPath = resolveDiskObjectMetaPath(objectPath);
+    if (metadataPath) {
+      try {
+        const rawMeta = await fs.promises.readFile(metadataPath, "utf8");
+        const parsed = JSON.parse(rawMeta);
+        if (parsed && typeof parsed === "object") {
+          metadata = parsed;
+        }
+      } catch {
+        // no-op
+      }
+    }
+
+    const metadataRoomId = normalizeRoomIdValue(metadata?.roomId);
+    if (metadataRoomId && metadataRoomId !== cleanRoomId) {
+      return null;
+    }
+    return {
+      roomId: cleanRoomId,
+      messageId: normalizeRelayString(metadata?.messageId, 96),
+      attachmentId: normalizeRelayString(metadata?.attachmentId, 96),
+      contentType: normalizeRelayAttachmentContentType(metadata?.contentType),
+      bodyPath: objectPath,
+      size: Number.isFinite(Number(metadata?.size))
+        ? Math.max(0, Math.round(Number(metadata.size)))
+        : stat.size,
+      createdAt: Number.isFinite(Number(metadata?.createdAt))
+        ? Math.max(0, Math.round(Number(metadata.createdAt)))
+        : nowMs(),
+    };
+  }
+
   async function listS3UploadedParts(session) {
     if (!s3Client || !useS3) {
       return [];
@@ -652,7 +742,7 @@ function createRelayUploadsManager({
         updatedAt: nowMs(),
         capabilitySocketId: req.relayCapability.socketId,
         fileFingerprint,
-        provider: useS3 ? "s3" : "memory",
+        provider: useS3 ? "s3" : "disk",
         parts: new Map(),
         resumeReported: false,
       });
@@ -662,7 +752,7 @@ function createRelayUploadsManager({
       res.setHeader("Cache-Control", "no-store");
       res.json({
         ok: true,
-        provider: useS3 ? "s3" : "memory",
+        provider: useS3 ? "s3" : "disk",
         sessionId,
         uploadId,
         objectKey,
@@ -742,7 +832,7 @@ function createRelayUploadsManager({
       res.setHeader("Cache-Control", "no-store");
       res.json({
         ok: true,
-        provider: "memory",
+        provider: "disk",
         sessionId: session.sessionId,
         partNumber: roundedPartNumber,
         method: "PUT",
@@ -776,7 +866,7 @@ function createRelayUploadsManager({
       });
       return;
     }
-    if (session.provider !== "memory") {
+    if (session.provider !== "memory" && session.provider !== "disk") {
       res.status(400).json({
         ok: false,
         error: "direct_part_upload_not_supported",
@@ -931,15 +1021,37 @@ function createRelayUploadsManager({
           ordered.push(chunk.buffer);
           totalBytes += chunk.buffer.length;
         }
+        const objectBody = Buffer.concat(ordered);
         memoryObjects.set(session.objectKey, {
           roomId: session.roomId,
           messageId: session.messageId,
           attachmentId: session.attachmentId,
           contentType: session.contentType,
-          body: Buffer.concat(ordered),
+          body: objectBody,
           createdAt: nowMs(),
           size: totalBytes,
         });
+        const diskObjectPath = resolveDiskObjectPath(session.objectKey);
+        if (!diskObjectPath) {
+          throw new Error("invalid_object_storage_path");
+        }
+        await fs.promises.mkdir(path.dirname(diskObjectPath), { recursive: true });
+        await fs.promises.writeFile(diskObjectPath, objectBody);
+        const diskObjectMetadataPath = resolveDiskObjectMetaPath(diskObjectPath);
+        if (diskObjectMetadataPath) {
+          await fs.promises.writeFile(
+            diskObjectMetadataPath,
+            JSON.stringify({
+              roomId: session.roomId,
+              messageId: session.messageId,
+              attachmentId: session.attachmentId,
+              contentType: session.contentType,
+              size: totalBytes,
+              createdAt: nowMs(),
+            }),
+            "utf8"
+          );
+        }
       }
 
       deleteSession(session.sessionId);
@@ -949,7 +1061,7 @@ function createRelayUploadsManager({
         ok: true,
         objectKey: session.objectKey,
         size: session.size,
-        provider: useS3 ? "s3" : "memory",
+        provider: useS3 ? "s3" : "disk",
       });
     } catch (error) {
       markMetric("complete", false);
@@ -1080,7 +1192,10 @@ function createRelayUploadsManager({
       }
 
       const cleanObjectKey = normalizeRelayString(objectKey, 512);
-      const objectEntry = memoryObjects.get(cleanObjectKey);
+      let objectEntry = memoryObjects.get(cleanObjectKey) || null;
+      if ((!objectEntry || objectEntry.roomId !== roomId) && !useS3) {
+        objectEntry = await loadDiskObjectEntry(roomId, cleanObjectKey);
+      }
       if (!objectEntry || objectEntry.roomId !== roomId) {
         markMetric("downloadUrl", false);
         res.status(404).json({
@@ -1101,7 +1216,7 @@ function createRelayUploadsManager({
       res.setHeader("Cache-Control", "no-store");
       res.json({
         ok: true,
-        provider: "memory",
+        provider: "disk",
         url: `/api/relay/objects/${encodeURIComponent(base64UrlEncode(cleanObjectKey))}?token=${encodeURIComponent(token)}`,
         expiresAt,
         rangeSupported: true,
@@ -1116,7 +1231,7 @@ function createRelayUploadsManager({
     }
   });
 
-  app.get("/api/relay/objects/:encodedObjectKey", (req, res) => {
+  app.get("/api/relay/objects/:encodedObjectKey", async (req, res) => {
     if (!relayModeEnabled) {
       res.status(404).end();
       return;
@@ -1154,8 +1269,11 @@ function createRelayUploadsManager({
       return;
     }
 
-    const entry = memoryObjects.get(objectKey);
-    if (!entry || entry.roomId !== roomId || !Buffer.isBuffer(entry.body)) {
+    let entry = memoryObjects.get(objectKey) || null;
+    if (!entry || entry.roomId !== roomId) {
+      entry = await loadDiskObjectEntry(roomId, objectKey);
+    }
+    if (!entry || entry.roomId !== roomId) {
       res.status(404).json({
         ok: false,
         error: "attachment_not_found",
@@ -1163,13 +1281,78 @@ function createRelayUploadsManager({
       return;
     }
 
-    const total = entry.body.length;
     const rangeHeader = String(req.headers?.range || "").trim();
+    const contentType = normalizeRelayAttachmentContentType(entry.contentType);
+
+    if (Buffer.isBuffer(entry.body)) {
+      const total = entry.body.length;
+      if (!rangeHeader) {
+        res.setHeader("Content-Type", contentType);
+        res.setHeader("Content-Length", String(total));
+        res.setHeader("Accept-Ranges", "bytes");
+        res.status(200).end(entry.body);
+        return;
+      }
+
+      const match = /^bytes=(\d*)-(\d*)$/i.exec(rangeHeader);
+      if (!match) {
+        res.status(416).end();
+        return;
+      }
+      const startText = match[1];
+      const endText = match[2];
+      const start = startText ? Number(startText) : 0;
+      const end = endText ? Number(endText) : total - 1;
+      if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end < start || end >= total) {
+        res.status(416).end();
+        return;
+      }
+      const body = entry.body.subarray(start, end + 1);
+      res.setHeader("Content-Type", contentType);
+      res.setHeader("Content-Length", String(body.length));
+      res.setHeader("Accept-Ranges", "bytes");
+      res.setHeader("Content-Range", `bytes ${start}-${end}/${total}`);
+      res.status(206).end(body);
+      return;
+    }
+
+    const diskBodyPath = normalizeRelayString(entry.bodyPath, 2048);
+    if (!diskBodyPath) {
+      res.status(404).json({
+        ok: false,
+        error: "attachment_not_found",
+      });
+      return;
+    }
+
+    let stat = null;
+    try {
+      stat = await fs.promises.stat(diskBodyPath);
+    } catch {
+      stat = null;
+    }
+    if (!stat || !stat.isFile()) {
+      res.status(404).json({
+        ok: false,
+        error: "attachment_not_found",
+      });
+      return;
+    }
+
+    const total = Math.round(stat.size);
     if (!rangeHeader) {
-      res.setHeader("Content-Type", entry.contentType || "application/octet-stream");
+      res.setHeader("Content-Type", contentType);
       res.setHeader("Content-Length", String(total));
       res.setHeader("Accept-Ranges", "bytes");
-      res.status(200).end(entry.body);
+      const stream = fs.createReadStream(diskBodyPath);
+      stream.on("error", () => {
+        if (!res.headersSent) {
+          res.status(500).end();
+        } else {
+          res.destroy();
+        }
+      });
+      stream.pipe(res);
       return;
     }
 
@@ -1186,12 +1369,20 @@ function createRelayUploadsManager({
       res.status(416).end();
       return;
     }
-    const body = entry.body.subarray(start, end + 1);
-    res.setHeader("Content-Type", entry.contentType || "application/octet-stream");
-    res.setHeader("Content-Length", String(body.length));
+    res.setHeader("Content-Type", contentType);
+    res.setHeader("Content-Length", String(end - start + 1));
     res.setHeader("Accept-Ranges", "bytes");
     res.setHeader("Content-Range", `bytes ${start}-${end}/${total}`);
-    res.status(206).end(body);
+    res.status(206);
+    const stream = fs.createReadStream(diskBodyPath, { start, end });
+    stream.on("error", () => {
+      if (!res.headersSent) {
+        res.status(500).end();
+      } else {
+        res.destroy();
+      }
+    });
+    stream.pipe(res);
   });
 
   app.get("/api/relay/metrics", (req, res) => {
@@ -1206,7 +1397,7 @@ function createRelayUploadsManager({
     res.setHeader("Cache-Control", "no-store");
     res.json({
       ok: true,
-      provider: useS3 ? "s3" : "memory",
+      provider: useS3 ? "s3" : "disk",
       capabilities: {
         ttlMs: capabilityTtlMs,
         signedUrlTtlSeconds,
@@ -1237,7 +1428,7 @@ function createRelayUploadsManager({
 
   return {
     enabled: relayModeEnabled,
-    provider: useS3 ? "s3" : "memory",
+    provider: useS3 ? "s3" : "disk",
     limits: {
       maxFileBytes,
       maxTotalMessageBytes,
