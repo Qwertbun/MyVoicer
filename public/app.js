@@ -6323,6 +6323,146 @@ function buildChatAttachmentCaption(attachment) {
   return sizeLabel ? `${attachment.name} (${sizeLabel})` : attachment.name;
 }
 
+function hasRelayV2AttachmentEnvelopeRef(attachment, messageId = "", roomId = "") {
+  const cleanAttachmentId = String(attachment?.id || "").trim();
+  const cleanMessageId = String(messageId || attachment?.messageId || "").trim();
+  if (!cleanAttachmentId || !cleanMessageId) {
+    return false;
+  }
+  const envelope = relayMessageEnvelopeCache.get(cleanMessageId);
+  if (!envelope || typeof envelope !== "object") {
+    return false;
+  }
+  const envelopeRoomId = normalizeRoomIdValue(envelope.roomId);
+  const expectedRoomId = normalizeRoomIdValue(roomId || attachment?.roomId || roomState?.id);
+  if (expectedRoomId && envelopeRoomId && envelopeRoomId !== expectedRoomId) {
+    return false;
+  }
+  if (!Array.isArray(envelope.attachmentRefs)) {
+    return false;
+  }
+  return envelope.attachmentRefs.some(
+    (item) =>
+      String(item?.attachmentId || "").trim() === cleanAttachmentId
+      && String(item?.transport || "").trim() === RELAY_ATTACHMENT_TRANSPORT_S3_V2
+      && Boolean(String(item?.objectKey || "").trim())
+  );
+}
+
+function canTreatAttachmentAsRelayV2(attachment, messageId = "", roomId = "") {
+  if (String(attachment?.transport || "").trim() === RELAY_ATTACHMENT_TRANSPORT_S3_V2) {
+    return true;
+  }
+  return hasRelayV2AttachmentEnvelopeRef(attachment, messageId, roomId);
+}
+
+async function tryHydrateRelayV2AttachmentMetaFromEnvelope(attachment, messageId = "", roomId = "") {
+  if (!attachment || typeof attachment !== "object") {
+    return false;
+  }
+  const cleanAttachmentId = String(attachment.id || "").trim();
+  const cleanMessageId = String(messageId || attachment.messageId || "").trim();
+  if (!cleanAttachmentId || !cleanMessageId) {
+    return false;
+  }
+
+  const envelope = relayMessageEnvelopeCache.get(cleanMessageId);
+  if (!envelope || typeof envelope !== "object") {
+    return false;
+  }
+  const envelopeRoomId = normalizeRoomIdValue(envelope.roomId);
+  const expectedRoomId = normalizeRoomIdValue(roomId || attachment.roomId || roomState?.id || envelopeRoomId);
+  if (!expectedRoomId || !envelopeRoomId || envelopeRoomId !== expectedRoomId) {
+    return false;
+  }
+  if (!Array.isArray(envelope.attachmentRefs) || envelope.attachmentRefs.length === 0) {
+    return false;
+  }
+  const ref = envelope.attachmentRefs.find(
+    (item) =>
+      String(item?.attachmentId || "").trim() === cleanAttachmentId
+      && String(item?.transport || "").trim() === RELAY_ATTACHMENT_TRANSPORT_S3_V2
+      && Boolean(String(item?.objectKey || "").trim())
+  );
+  if (!ref) {
+    return false;
+  }
+
+  attachment.transport = RELAY_ATTACHMENT_TRANSPORT_S3_V2;
+  attachment.objectKey = String(ref.objectKey || "").trim();
+  attachment.messageId = cleanMessageId;
+  attachment.roomId = expectedRoomId;
+  attachment.encrypted = true;
+  attachment.name = String(attachment.name || ref.name || "file").trim().slice(0, 120) || "file";
+  attachment.mimeType = normalizeChatAttachmentMimeType(attachment.mimeType || ref.mimeType);
+  const refSize = Number(ref.size);
+  if ((!Number.isFinite(Number(attachment.size)) || Number(attachment.size) <= 0) && Number.isFinite(refSize) && refSize > 0) {
+    attachment.size = Math.round(refSize);
+  }
+
+  const hasChunkCryptoMeta = (
+    String(attachment.fileKey || "").trim()
+    && String(attachment.noncePrefix || "").trim()
+    && Number(attachment.chunkSize) > 0
+    && Number(attachment.totalChunks) > 0
+  );
+  if (!hasChunkCryptoMeta) {
+    try {
+      const payload = await decryptRelayPayload(
+        envelopeRoomId,
+        String(envelope.iv || ""),
+        String(envelope.ciphertext || "")
+      );
+      const attachmentMeta = Array.isArray(payload?.attachmentsV2)
+        ? payload.attachmentsV2
+            .map((item) => normalizeRelayV2AttachmentMeta(item, cleanMessageId))
+            .find((item) => item && item.attachmentId === cleanAttachmentId)
+        : null;
+      if (attachmentMeta) {
+        attachment.fileKey = String(attachmentMeta.fileKey || "").trim();
+        attachment.noncePrefix = String(attachmentMeta.noncePrefix || "").trim();
+        attachment.chunkSize = Number(attachmentMeta.chunkSize) || 0;
+        attachment.totalChunks = Number(attachmentMeta.totalChunks) || 0;
+        attachment.objectKey = String(attachmentMeta.objectKey || attachment.objectKey || "").trim();
+        if (Number(attachmentMeta.size) > 0) {
+          attachment.size = Math.round(Number(attachmentMeta.size));
+        }
+        if (String(attachmentMeta.name || "").trim()) {
+          attachment.name = String(attachmentMeta.name || "").trim().slice(0, 120);
+        }
+        if (String(attachmentMeta.mimeType || "").trim()) {
+          attachment.mimeType = normalizeChatAttachmentMimeType(attachmentMeta.mimeType);
+        }
+      }
+    } catch {
+      // no-op: keep ref-based metadata, download path will report missing crypto fields if needed
+    }
+  }
+
+  const normalizedMessage = getChatMessageById(cleanMessageId);
+  if (normalizedMessage && Array.isArray(normalizedMessage.attachments)) {
+    const target = normalizedMessage.attachments.find((item) => String(item?.id || "").trim() === cleanAttachmentId);
+    if (target && target !== attachment) {
+      Object.assign(target, {
+        transport: attachment.transport,
+        objectKey: attachment.objectKey,
+        fileKey: attachment.fileKey,
+        noncePrefix: attachment.noncePrefix,
+        chunkSize: attachment.chunkSize,
+        totalChunks: attachment.totalChunks,
+        roomId: attachment.roomId,
+        messageId: attachment.messageId,
+        encrypted: true,
+        name: attachment.name,
+        mimeType: attachment.mimeType,
+        size: attachment.size,
+      });
+    }
+  }
+
+  return attachment.transport === RELAY_ATTACHMENT_TRANSPORT_S3_V2 && Boolean(String(attachment.objectKey || "").trim());
+}
+
 function isInlineBlobLikeUrl(url) {
   const cleanUrl = String(url || "").trim().toLowerCase();
   return cleanUrl.startsWith("blob:") || cleanUrl.startsWith("data:");
@@ -6333,7 +6473,7 @@ function createChatAttachmentElement(attachment, messageId = "", roomId = "") {
   wrapper.className = "chat-attachment";
 
   if (attachment.encrypted && !attachment.url) {
-    const isRelayV2Attachment = attachment.transport === RELAY_ATTACHMENT_TRANSPORT_S3_V2;
+    const isRelayV2Attachment = canTreatAttachmentAsRelayV2(attachment, messageId, roomId);
     const button = document.createElement("button");
     button.type = "button";
     button.className = "chat-attachment-file-link";
@@ -6351,13 +6491,19 @@ function createChatAttachmentElement(attachment, messageId = "", roomId = "") {
       button.classList.add("chat-attachment-legacy-btn");
       button.title = t("legacyRelayAttachmentUnsupported");
     }
-    button.addEventListener("click", () => {
-      if (!isRelayV2Attachment) {
+    button.addEventListener("click", async () => {
+      const attachmentRoomId = normalizeRoomIdValue(attachment.roomId || roomId || roomState?.id);
+      const attachmentMessageId = String(messageId || attachment.messageId || "").trim();
+      const hydratedV2 = await tryHydrateRelayV2AttachmentMetaFromEnvelope(
+        attachment,
+        attachmentMessageId,
+        attachmentRoomId
+      );
+      const isRelayV2Now = hydratedV2 || canTreatAttachmentAsRelayV2(attachment, attachmentMessageId, attachmentRoomId);
+      if (!isRelayV2Now) {
         reportLegacyRelayAttachmentUnsupported(attachment, roomId);
         return;
       }
-      const attachmentRoomId = normalizeRoomIdValue(attachment.roomId || roomId || roomState?.id);
-      const attachmentMessageId = String(messageId || attachment.messageId || "").trim();
       console.info("attachment_download_click", {
         roomId: attachmentRoomId,
         messageId: attachmentMessageId,
