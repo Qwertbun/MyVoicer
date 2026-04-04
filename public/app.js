@@ -5810,6 +5810,19 @@ async function saveRelayV2AttachmentViaBlob(response, attachment) {
   }, 30000);
 }
 
+function reportAttachmentSourceUnavailable(reason, context = {}, error = null) {
+  const details = {
+    reason: String(reason || "unknown").trim() || "unknown",
+    ...(context && typeof context === "object" ? context : {}),
+  };
+  setStatus(t("attachmentSourceUnavailable"));
+  if (error) {
+    console.error("attachment_source_unavailable", details, error);
+    return;
+  }
+  console.error("attachment_source_unavailable", details);
+}
+
 async function downloadRelayV2Attachment(attachment, roomId) {
   const candidateRoomIds = Array.from(
     new Set(
@@ -5819,12 +5832,19 @@ async function downloadRelayV2Attachment(attachment, roomId) {
     )
   );
   if (candidateRoomIds.length === 0) {
-    setStatus(t("attachmentSourceUnavailable"));
+    reportAttachmentSourceUnavailable("missing_room_id", {
+      attachmentId: String(attachment?.id || "").trim(),
+      messageId: String(attachment?.messageId || "").trim(),
+    });
     return;
   }
   const objectKey = String(attachment?.objectKey || "").trim();
   if (!objectKey) {
-    setStatus(t("attachmentSourceUnavailable"));
+    reportAttachmentSourceUnavailable("missing_object_key", {
+      attachmentId: String(attachment?.id || "").trim(),
+      messageId: String(attachment?.messageId || "").trim(),
+      roomIdCandidates: candidateRoomIds,
+    });
     return;
   }
 
@@ -5850,14 +5870,29 @@ async function downloadRelayV2Attachment(attachment, roomId) {
       setStatus(`${attachment.name} downloaded`);
       return;
     } catch (error) {
+      console.error("relay_v2_download_attempt_failed", {
+        roomId: candidateRoomId,
+        objectKey,
+        attachmentId: String(attachment?.id || "").trim(),
+        messageId: String(attachment?.messageId || "").trim(),
+        error: String(error?.message || error || ""),
+        status: Number(error?.status) || 0,
+        payload: error?.payload || null,
+      });
       lastError = error;
     }
   }
 
-  if (lastError) {
-    console.warn("relay_v2_download_failed", lastError);
-  }
-  setStatus(t("attachmentSourceUnavailable"));
+  reportAttachmentSourceUnavailable(
+    "download_failed",
+    {
+      objectKey,
+      attachmentId: String(attachment?.id || "").trim(),
+      messageId: String(attachment?.messageId || "").trim(),
+      roomIdCandidates: candidateRoomIds,
+    },
+    lastError
+  );
 }
 
 function splitRelayCiphertextToChunks(ciphertext, chunkSize = RELAY_ATTACHMENT_CHUNK_SIZE) {
@@ -5891,7 +5926,14 @@ function markRelayAttachmentRequestFailed(requestId) {
     clearRelayAttachmentRequestTimeout(entry);
     relayAttachmentRequestMap.delete(cleanRequestId);
   }
-  setStatus(t("attachmentSourceUnavailable"));
+  reportAttachmentSourceUnavailable("peer_request_failed", {
+    requestId: cleanRequestId,
+    roomId: String(entry?.roomId || "").trim(),
+    messageId: String(entry?.messageId || "").trim(),
+    attachmentId: String(entry?.attachmentId || "").trim(),
+    activeSourceId: String(entry?.activeSourceId || "").trim(),
+    pendingSources: Array.isArray(entry?.pendingSources) ? entry.pendingSources : [],
+  });
 }
 
 function scheduleRelayAttachmentRequestTimeout(requestId) {
@@ -5988,13 +6030,21 @@ async function requestRelayAttachmentFromPeers(roomId, messageId, attachment) {
   }
 
   if (sources.length === 0) {
-    setStatus(t("attachmentSourceUnavailable"));
+    reportAttachmentSourceUnavailable("peer_sources_empty", {
+      roomId: cleanRoomId,
+      messageId: cleanMessageId,
+      attachmentId: String(attachment?.id || "").trim(),
+    });
     return false;
   }
 
   const firstSourceId = sources.shift() || "";
   if (!firstSourceId) {
-    setStatus(t("attachmentSourceUnavailable"));
+    reportAttachmentSourceUnavailable("peer_source_missing", {
+      roomId: cleanRoomId,
+      messageId: cleanMessageId,
+      attachmentId: String(attachment?.id || "").trim(),
+    });
     return false;
   }
 
@@ -6093,7 +6143,14 @@ async function completeRelayAttachmentRequest(requestId) {
     .filter((item) => typeof item === "string")
     .join("");
   if (!ordered || !entry.iv) {
-    setStatus(t("attachmentSourceUnavailable"));
+    reportAttachmentSourceUnavailable("peer_payload_invalid", {
+      requestId: String(requestId || "").trim(),
+      roomId: String(entry?.roomId || "").trim(),
+      messageId: String(entry?.messageId || "").trim(),
+      attachmentId: String(entry?.attachmentId || "").trim(),
+      hasCiphertext: Boolean(ordered),
+      hasIv: Boolean(entry?.iv),
+    });
     return;
   }
 
