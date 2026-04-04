@@ -207,6 +207,8 @@ const RELAY_INLINE_ATTACHMENT_EMIT_MAX_BYTES = 2 * 1024 * 1024;
 const RELAY_V2_UPLOAD_CHUNK_SIZE_BYTES = 16 * 1024 * 1024;
 const RELAY_V2_MAX_FILE_BYTES = 10 * 1024 * 1024 * 1024;
 const RELAY_V2_MAX_TOTAL_MESSAGE_BYTES = 10 * 1024 * 1024 * 1024;
+const RELAY_LOCAL_PREVIEW_CACHE_TTL_MS = 12 * 60 * 60 * 1000;
+const RELAY_LOCAL_PREVIEW_CACHE_MAX_ENTRIES = 300;
 const RELAY_IDB_NAME = "qwerbentum_relay_v1";
 const RELAY_IDB_VERSION = 2;
 const RELAY_STORE_MESSAGES = "cipher_messages";
@@ -1201,6 +1203,7 @@ const relayRoomKeyCache = new Map();
 const relayMessageEnvelopeCache = new Map();
 const relayAttachmentSourceMap = new Map();
 const relayAttachmentRequestMap = new Map();
+const relayLocalAttachmentPreviewCache = new Map();
 let relayCapabilityToken = "";
 let relayCapabilityTokenExpiresAt = 0;
 let relayCapabilityRoomId = "";
@@ -2237,6 +2240,142 @@ function delayMs(durationMs) {
   return new Promise((resolve) => {
     setTimeout(resolve, Number.isFinite(timeout) && timeout > 0 ? Math.round(timeout) : 0);
   });
+}
+
+function buildRelayLocalAttachmentPreviewKey(roomId, messageId, attachmentId) {
+  const cleanRoomId = normalizeRoomIdValue(roomId);
+  const cleanMessageId = String(messageId || "").trim();
+  const cleanAttachmentId = String(attachmentId || "").trim();
+  if (!cleanRoomId || !cleanMessageId || !cleanAttachmentId) {
+    return "";
+  }
+  return `${cleanRoomId}::${cleanMessageId}::${cleanAttachmentId}`;
+}
+
+function releaseRelayLocalAttachmentPreviewEntry(key) {
+  const cleanKey = String(key || "").trim();
+  if (!cleanKey) {
+    return;
+  }
+  const entry = relayLocalAttachmentPreviewCache.get(cleanKey);
+  if (!entry) {
+    return;
+  }
+  const previewUrl = String(entry.url || "").trim();
+  if (previewUrl) {
+    URL.revokeObjectURL(previewUrl);
+  }
+  relayLocalAttachmentPreviewCache.delete(cleanKey);
+}
+
+function pruneRelayLocalAttachmentPreviewCache() {
+  if (relayLocalAttachmentPreviewCache.size === 0) {
+    return;
+  }
+
+  const now = Date.now();
+  for (const [key, entry] of relayLocalAttachmentPreviewCache.entries()) {
+    if (!entry || !Number.isFinite(entry.savedAt) || now - entry.savedAt > RELAY_LOCAL_PREVIEW_CACHE_TTL_MS) {
+      releaseRelayLocalAttachmentPreviewEntry(key);
+    }
+  }
+
+  if (relayLocalAttachmentPreviewCache.size <= RELAY_LOCAL_PREVIEW_CACHE_MAX_ENTRIES) {
+    return;
+  }
+
+  const entriesByAge = Array.from(relayLocalAttachmentPreviewCache.entries())
+    .sort((left, right) => {
+      const leftSavedAt = Number(left?.[1]?.savedAt) || 0;
+      const rightSavedAt = Number(right?.[1]?.savedAt) || 0;
+      return leftSavedAt - rightSavedAt;
+    });
+  const overflow = relayLocalAttachmentPreviewCache.size - RELAY_LOCAL_PREVIEW_CACHE_MAX_ENTRIES;
+  for (let index = 0; index < overflow; index += 1) {
+    releaseRelayLocalAttachmentPreviewEntry(entriesByAge[index]?.[0] || "");
+  }
+}
+
+function rememberRelayLocalAttachmentPreview(roomId, messageId, attachmentId, file, fallbackMeta = {}) {
+  const cacheKey = buildRelayLocalAttachmentPreviewKey(roomId, messageId, attachmentId);
+  if (!cacheKey || !(file instanceof Blob)) {
+    return null;
+  }
+
+  const mimeType = normalizeChatAttachmentMimeType(
+    file.type || fallbackMeta.mimeType
+  );
+  const name = String(file.name || fallbackMeta.name || "file").trim().slice(0, 120) || "file";
+  const sizeValue = Number(file.size || fallbackMeta.size);
+  const size = Number.isFinite(sizeValue) && sizeValue > 0 ? Math.round(sizeValue) : 0;
+  const previewUrl = URL.createObjectURL(file);
+
+  releaseRelayLocalAttachmentPreviewEntry(cacheKey);
+  const entry = {
+    url: previewUrl,
+    name,
+    mimeType,
+    size,
+    previewKind: getChatAttachmentPreviewKind(mimeType),
+    savedAt: Date.now(),
+  };
+  relayLocalAttachmentPreviewCache.set(cacheKey, entry);
+  pruneRelayLocalAttachmentPreviewCache();
+  return entry;
+}
+
+function getRelayLocalAttachmentPreview(roomId, messageId, attachmentId) {
+  const cacheKey = buildRelayLocalAttachmentPreviewKey(roomId, messageId, attachmentId);
+  if (!cacheKey) {
+    return null;
+  }
+  const entry = relayLocalAttachmentPreviewCache.get(cacheKey) || null;
+  if (!entry) {
+    return null;
+  }
+  if (!Number.isFinite(entry.savedAt) || Date.now() - entry.savedAt > RELAY_LOCAL_PREVIEW_CACHE_TTL_MS) {
+    releaseRelayLocalAttachmentPreviewEntry(cacheKey);
+    return null;
+  }
+  return entry;
+}
+
+function clearRelayLocalAttachmentPreviewsForMessage(roomId, messageId, keepAttachmentIds = null) {
+  const cleanRoomId = normalizeRoomIdValue(roomId);
+  const cleanMessageId = String(messageId || "").trim();
+  if (!cleanRoomId || !cleanMessageId || relayLocalAttachmentPreviewCache.size === 0) {
+    return;
+  }
+
+  const keepSet = keepAttachmentIds instanceof Set
+    ? keepAttachmentIds
+    : Array.isArray(keepAttachmentIds)
+      ? new Set(
+        keepAttachmentIds
+          .map((item) => String(item || "").trim())
+          .filter(Boolean)
+      )
+      : null;
+
+  const prefix = `${cleanRoomId}::${cleanMessageId}::`;
+  for (const key of Array.from(relayLocalAttachmentPreviewCache.keys())) {
+    if (!key.startsWith(prefix)) {
+      continue;
+    }
+    if (keepSet) {
+      const attachmentId = key.slice(prefix.length);
+      if (attachmentId && keepSet.has(attachmentId)) {
+        continue;
+      }
+    }
+    releaseRelayLocalAttachmentPreviewEntry(key);
+  }
+}
+
+function clearAllRelayLocalAttachmentPreviews() {
+  for (const key of Array.from(relayLocalAttachmentPreviewCache.keys())) {
+    releaseRelayLocalAttachmentPreviewEntry(key);
+  }
 }
 
 function estimatePayloadSize(value) {
@@ -5107,24 +5246,38 @@ function createRelayAttachmentViewModel(roomId, messageId, attachmentMeta, decry
   const cleanMessageId = String(messageId || "").trim();
   const cleanAttachmentId = String(attachmentMeta?.attachmentId || "").trim();
   const attachmentIdForLookup = cleanAttachmentId || `${cleanMessageId}-attachment`;
+  const localPreview = getRelayLocalAttachmentPreview(
+    cleanRoomId,
+    cleanMessageId,
+    attachmentIdForLookup
+  );
   const decryptedMeta = decryptedMetaById instanceof Map
     ? decryptedMetaById.get(attachmentIdForLookup) || null
     : null;
   const isV2 = decryptedMeta?.transport === RELAY_ATTACHMENT_TRANSPORT_S3_V2
     || attachmentMeta?.transport === RELAY_ATTACHMENT_TRANSPORT_S3_V2;
-  const mimeType = normalizeChatAttachmentMimeType(decryptedMeta?.mimeType || attachmentMeta?.mimeType);
-  const previewKind = getChatAttachmentPreviewKind(mimeType);
+  const mimeType = normalizeChatAttachmentMimeType(
+    decryptedMeta?.mimeType || attachmentMeta?.mimeType || localPreview?.mimeType
+  );
+  const previewKind = localPreview?.previewKind || getChatAttachmentPreviewKind(mimeType);
 
   return {
     id: attachmentIdForLookup,
     messageId: cleanMessageId,
     roomId: cleanRoomId,
-    name: String(decryptedMeta?.name || attachmentMeta?.name || t("encryptedAttachment")).trim().slice(0, 120) || t("encryptedAttachment"),
+    name: String(
+      decryptedMeta?.name
+      || attachmentMeta?.name
+      || localPreview?.name
+      || t("encryptedAttachment")
+    ).trim().slice(0, 120) || t("encryptedAttachment"),
     mimeType,
     size: Number.isFinite(Number(decryptedMeta?.size || attachmentMeta?.size))
       ? Math.max(0, Math.round(Number(decryptedMeta?.size || attachmentMeta?.size)))
-      : 0,
-    url: "",
+      : Number.isFinite(Number(localPreview?.size))
+        ? Math.max(0, Math.round(Number(localPreview.size)))
+        : 0,
+    url: String(localPreview?.url || "").trim(),
     previewKind,
     encrypted: true,
     transport: isV2 ? RELAY_ATTACHMENT_TRANSPORT_S3_V2 : "",
@@ -6897,6 +7050,17 @@ async function buildRelayEncryptedChatPacket(roomId, text) {
       name: uploaded.name,
       mimeType: uploaded.mimeType,
     });
+    rememberRelayLocalAttachmentPreview(
+      cleanRoomId,
+      uploaded.messageId,
+      uploaded.attachmentId,
+      attachment.file,
+      {
+        name: uploaded.name,
+        mimeType: uploaded.mimeType,
+        size: uploaded.size,
+      }
+    );
   }
 
   const encryptedPayload = await encryptRelayPayload(cleanRoomId, {
@@ -7489,6 +7653,19 @@ function upsertChatMessage(message) {
 
   const existingIndex = chatMessages.findIndex((item) => item.id === normalizedMessage.id);
   if (existingIndex >= 0) {
+    const previous = chatMessages[existingIndex];
+    const keepAttachmentIds = new Set(
+      Array.isArray(normalizedMessage.attachments)
+        ? normalizedMessage.attachments
+            .map((item) => String(item?.id || "").trim())
+            .filter(Boolean)
+        : []
+    );
+    clearRelayLocalAttachmentPreviewsForMessage(
+      normalizeRoomIdValue(normalizedMessage.roomId || previous?.roomId || roomState?.id),
+      normalizedMessage.id,
+      keepAttachmentIds
+    );
     chatMessages[existingIndex] = normalizedMessage;
   } else {
     chatMessages.push(normalizedMessage);
@@ -7519,6 +7696,11 @@ function removeChatMessageById(messageId) {
   const [removed] = chatMessages.splice(index, 1);
   if (removed?.id) {
     chatMessageIds.delete(removed.id);
+    clearRelayLocalAttachmentPreviewsForMessage(
+      normalizeRoomIdValue(removed.roomId || roomState?.id),
+      removed.id,
+      []
+    );
   }
 
   if (activeChatEditMessageId === cleanMessageId) {
@@ -7529,6 +7711,7 @@ function removeChatMessageById(messageId) {
 }
 
 function replaceChatMessages(messages) {
+  clearAllRelayLocalAttachmentPreviews();
   resetChatEditState();
   chatMessages.length = 0;
   chatMessageIds.clear();
