@@ -5228,6 +5228,21 @@ async function handleRelayChatPacket(packet, { fromReplay = false } = {}) {
     return;
   }
 
+  if (Array.isArray(normalizedEnvelope.attachmentRefs) && normalizedEnvelope.attachmentRefs.length > 0) {
+    console.info("relay_chat_attachment_refs_incoming", {
+      roomId: normalizedEnvelope.roomId,
+      messageId: normalizedEnvelope.messageId,
+      sourceId: String(packet?.sourceId || "").trim(),
+      fromReplay: Boolean(fromReplay),
+      transportVersion: Number(normalizedEnvelope.transportVersion) || 1,
+      refs: normalizedEnvelope.attachmentRefs.map((item) => ({
+        attachmentId: item.attachmentId,
+        transport: item.transport || "",
+        hasObjectKey: Boolean(String(item.objectKey || "").trim()),
+      })),
+    });
+  }
+
   if (roomState?.id && normalizeRoomIdValue(roomState.id) !== normalizedEnvelope.roomId) {
     return;
   }
@@ -6690,6 +6705,19 @@ async function buildRelayEncryptedChatPacket(roomId, text) {
       totalChunks: item.totalChunks,
     })),
   });
+
+  if (attachmentRefs.length > 0) {
+    console.info("relay_chat_attachment_refs_outgoing", {
+      roomId: cleanRoomId,
+      messageId,
+      transportVersion: 2,
+      refs: attachmentRefs.map((item) => ({
+        attachmentId: item.attachmentId,
+        transport: item.transport,
+        hasObjectKey: Boolean(String(item.objectKey || "").trim()),
+      })),
+    });
+  }
 
   return {
     envelope: {

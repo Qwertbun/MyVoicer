@@ -2044,6 +2044,21 @@ io.on("connection", (socket) => {
         return;
       }
 
+      if (Array.isArray(sanitizedEnvelope.attachmentRefs) && sanitizedEnvelope.attachmentRefs.length > 0) {
+        console.info("relay_chat_attachment_refs_server", {
+          roomId,
+          messageId: sanitizedEnvelope.messageId,
+          senderSocketId: socket.id,
+          senderRelayId: relaySenderId,
+          transportVersion: sanitizedEnvelope.transportVersion,
+          refs: sanitizedEnvelope.attachmentRefs.map((item) => ({
+            attachmentId: item.attachmentId,
+            transport: item.transport || "",
+            hasObjectKey: Boolean(String(item.objectKey || "").trim()),
+          })),
+        });
+      }
+
       const hasLegacyAttachmentPayloads = Array.isArray(attachmentPayloads) && attachmentPayloads.length > 0;
       if (hasLegacyAttachmentPayloads) {
         socket.emit("chat-error", {
