@@ -417,6 +417,47 @@ function setupRoutes(runtimeState) {
     return attachmentService.getDownloadUrl(request.body, buildRequestBaseUrl(request));
   });
 
+  fastify.get("/api/v2/relay/attachments/object/:objectKey", async (request, reply) => {
+    const result = await attachmentService.getDownloadObjectByToken(
+      request.params.objectKey,
+      request.query?.token
+    );
+    if (!result?.ok) {
+      reply.code(result?.errorCode === "invalid_download_token" ? 401 : 404);
+      return {
+        ok: false,
+        errorCode: String(result?.errorCode || "object_not_found"),
+      };
+    }
+
+    if (result.mimeType) {
+      reply.header("Content-Type", String(result.mimeType));
+    }
+    if (Number(result.size) > 0) {
+      reply.header("Content-Length", String(Math.round(Number(result.size))));
+    }
+    reply.header("Cache-Control", "private, no-store");
+
+    const body = result.body;
+    if (Buffer.isBuffer(body) || typeof body?.pipe === "function") {
+      return reply.send(body);
+    }
+    if (typeof body?.transformToByteArray === "function") {
+      const bytes = await body.transformToByteArray();
+      return reply.send(Buffer.from(bytes));
+    }
+    if (typeof body?.arrayBuffer === "function") {
+      const bytes = await body.arrayBuffer();
+      return reply.send(Buffer.from(bytes));
+    }
+
+    reply.code(500);
+    return {
+      ok: false,
+      errorCode: "download_body_unsupported",
+    };
+  });
+
   fastify.addContentTypeParser("application/octet-stream", { parseAs: "buffer" }, (_req, body, done) => {
     done(null, body);
   });

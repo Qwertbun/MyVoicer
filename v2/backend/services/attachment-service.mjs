@@ -17,6 +17,7 @@ const MAX_PARTS = 10000;
 const MIN_PART_NUMBER = 1;
 const MAX_PART_NUMBER = 10000;
 const MEMORY_SESSION_TTL_MS = 24 * 60 * 60 * 1000;
+const DOWNLOAD_TOKEN_TTL_SECONDS = 15 * 60;
 
 function normalizePositiveNumber(value, fallback) {
   const numeric = Number(value);
@@ -45,6 +46,42 @@ function normalizeFileName(value) {
 
 function buildMemoryPartKey(sessionId, partNumber) {
   return `${sessionId}:${partNumber}`;
+}
+
+function safeTimingEqual(left, right) {
+  if (!Buffer.isBuffer(left) || !Buffer.isBuffer(right) || left.length !== right.length) {
+    return false;
+  }
+  return crypto.timingSafeEqual(left, right);
+}
+
+function base64UrlEncodeBuffer(buffer) {
+  return Buffer.from(buffer)
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+}
+
+function base64UrlDecodeToBuffer(value) {
+  const clean = String(value || "").trim().replace(/-/g, "+").replace(/_/g, "/");
+  if (!clean) {
+    throw new Error("base64url_empty");
+  }
+
+  const paddingLength = (4 - (clean.length % 4)) % 4;
+  const padded = clean + "=".repeat(paddingLength);
+  return Buffer.from(padded, "base64");
+}
+
+function isObjectKeyAllowedForRoom(roomId, objectKey) {
+  const cleanRoomId = normalizeRoomId(roomId);
+  const cleanObjectKey = normalizeString(objectKey, 512);
+  if (!cleanRoomId || !cleanObjectKey) {
+    return false;
+  }
+
+  return cleanObjectKey.startsWith(`relay-v2/${cleanRoomId}/`);
 }
 
 function ensureArray(value) {
@@ -78,6 +115,7 @@ export class AttachmentService {
       process.env.RELAY_V2_MAX_TOTAL_MESSAGE_BYTES,
       MAX_TOTAL_MESSAGE_BYTES
     );
+    this.downloadTokenSecret = String(process.env.RELAY_V2_DOWNLOAD_TOKEN_SECRET || "").trim() || randomUUID();
   }
 
   get provider() {
@@ -132,6 +170,90 @@ export class AttachmentService {
       roomId,
       authorId,
     });
+  }
+
+  signDownloadToken(payload = {}) {
+    const encodedPayload = base64UrlEncodeBuffer(Buffer.from(JSON.stringify(payload), "utf8"));
+    const signature = crypto.createHmac("sha256", this.downloadTokenSecret).update(encodedPayload).digest();
+    const encodedSignature = base64UrlEncodeBuffer(signature);
+    return `${encodedPayload}.${encodedSignature}`;
+  }
+
+  verifyDownloadToken(token, expectedObjectKey = "") {
+    const cleanToken = String(token || "").trim();
+    const cleanObjectKey = normalizeString(expectedObjectKey, 512);
+    if (!cleanToken || !cleanObjectKey) {
+      return null;
+    }
+
+    const delimiter = cleanToken.lastIndexOf(".");
+    if (delimiter <= 0 || delimiter >= cleanToken.length - 1) {
+      return null;
+    }
+
+    const encodedPayload = cleanToken.slice(0, delimiter);
+    const encodedSignature = cleanToken.slice(delimiter + 1);
+    let payloadBuffer;
+    let signatureBuffer;
+    try {
+      payloadBuffer = base64UrlDecodeToBuffer(encodedPayload);
+      signatureBuffer = base64UrlDecodeToBuffer(encodedSignature);
+    } catch {
+      return null;
+    }
+
+    const expectedSignature = crypto.createHmac("sha256", this.downloadTokenSecret)
+      .update(encodedPayload)
+      .digest();
+    if (!safeTimingEqual(expectedSignature, signatureBuffer)) {
+      return null;
+    }
+
+    let payload = null;
+    try {
+      payload = JSON.parse(payloadBuffer.toString("utf8"));
+    } catch {
+      return null;
+    }
+
+    const roomId = normalizeRoomId(payload?.roomId);
+    const objectKey = normalizeString(payload?.objectKey, 512);
+    const expiresAt = Number(payload?.expiresAt);
+    if (!roomId || !objectKey || !Number.isFinite(expiresAt) || Date.now() >= Math.round(expiresAt)) {
+      return null;
+    }
+
+    if (objectKey !== cleanObjectKey) {
+      return null;
+    }
+
+    if (!isObjectKeyAllowedForRoom(roomId, objectKey)) {
+      return null;
+    }
+
+    return {
+      roomId,
+      objectKey,
+      expiresAt: Math.round(expiresAt),
+    };
+  }
+
+  buildDownloadProxyUrl(roomId, objectKey, requestBaseUrl = "") {
+    const cleanRoomId = normalizeRoomId(roomId);
+    const cleanObjectKey = normalizeString(objectKey, 512);
+    if (!cleanRoomId || !cleanObjectKey) {
+      return "";
+    }
+
+    const expiresAt = Date.now() + DOWNLOAD_TOKEN_TTL_SECONDS * 1000;
+    const token = this.signDownloadToken({
+      v: 1,
+      roomId: cleanRoomId,
+      objectKey: cleanObjectKey,
+      expiresAt,
+    });
+    const cleanBaseUrl = String(requestBaseUrl || "").replace(/\/+$/, "");
+    return `${cleanBaseUrl}/api/v2/relay/attachments/object/${encodeURIComponent(cleanObjectKey)}?token=${encodeURIComponent(token)}`;
   }
 
   pruneExpired() {
@@ -393,18 +515,30 @@ export class AttachmentService {
     if (!roomId || !objectKey) {
       return { ok: false, errorCode: "invalid_download_request" };
     }
+    if (!isObjectKeyAllowedForRoom(roomId, objectKey)) {
+      return { ok: false, errorCode: "invalid_object_key" };
+    }
+
+    const proxyDownloadUrl = this.buildDownloadProxyUrl(roomId, objectKey, requestBaseUrl);
+    if (!proxyDownloadUrl) {
+      return { ok: false, errorCode: "invalid_download_request" };
+    }
 
     if (this.provider === "s3-v2") {
       const command = new GetObjectCommand({
         Bucket: this.s3Bucket,
         Key: objectKey,
       });
-      const downloadUrl = await getSignedUrl(this.s3Client, command, { expiresIn: 15 * 60 });
+      const directDownloadUrl = await getSignedUrl(this.s3Client, command, {
+        expiresIn: DOWNLOAD_TOKEN_TTL_SECONDS,
+      });
       return {
         ok: true,
         provider: "s3-v2",
         objectKey,
-        downloadUrl,
+        downloadUrl: proxyDownloadUrl,
+        directDownloadUrl,
+        expiresAt: Date.now() + DOWNLOAD_TOKEN_TTL_SECONDS * 1000,
       };
     }
 
@@ -412,14 +546,12 @@ export class AttachmentService {
     if (!objectEntry || objectEntry.roomId !== roomId) {
       return { ok: false, errorCode: "object_not_found" };
     }
-
-    const cleanBaseUrl = String(requestBaseUrl || "").replace(/\/+$/, "");
-    const downloadUrl = `${cleanBaseUrl}/api/v2/relay/uploads/memory/object/${encodeURIComponent(objectKey)}`;
     return {
       ok: true,
       provider: "memory-v2",
       objectKey,
-      downloadUrl,
+      downloadUrl: proxyDownloadUrl,
+      expiresAt: Date.now() + DOWNLOAD_TOKEN_TTL_SECONDS * 1000,
     };
   }
 
@@ -453,6 +585,66 @@ export class AttachmentService {
       sessionId: session.id,
       partNumber: cleanPartNumber,
       etag: session.parts.get(cleanPartNumber).etag,
+    };
+  }
+
+  async getDownloadObjectByToken(encodedObjectKey, token) {
+    let objectKeyRaw = "";
+    try {
+      objectKeyRaw = decodeURIComponent(String(encodedObjectKey || ""));
+    } catch {
+      objectKeyRaw = String(encodedObjectKey || "");
+    }
+    const objectKey = normalizeString(objectKeyRaw, 512);
+    if (!objectKey) {
+      return { ok: false, errorCode: "invalid_object_key" };
+    }
+
+    const tokenPayload = this.verifyDownloadToken(token, objectKey);
+    if (!tokenPayload) {
+      return { ok: false, errorCode: "invalid_download_token" };
+    }
+
+    if (this.provider === "s3-v2") {
+      let objectResponse = null;
+      try {
+        objectResponse = await this.s3Client.send(new GetObjectCommand({
+          Bucket: this.s3Bucket,
+          Key: objectKey,
+        }));
+      } catch {
+        return { ok: false, errorCode: "object_not_found" };
+      }
+
+      const body = objectResponse?.Body || null;
+      if (!body) {
+        return { ok: false, errorCode: "object_not_found" };
+      }
+
+      return {
+        ok: true,
+        provider: "s3-v2",
+        objectKey,
+        roomId: tokenPayload.roomId,
+        mimeType: normalizeMimeType(objectResponse.ContentType),
+        size: Number(objectResponse.ContentLength) > 0 ? Math.round(Number(objectResponse.ContentLength)) : 0,
+        body,
+      };
+    }
+
+    const objectEntry = this.memoryObjects.get(objectKey);
+    if (!objectEntry || objectEntry.roomId !== tokenPayload.roomId) {
+      return { ok: false, errorCode: "object_not_found" };
+    }
+
+    return {
+      ok: true,
+      provider: "memory-v2",
+      objectKey,
+      roomId: tokenPayload.roomId,
+      mimeType: normalizeMimeType(objectEntry.mimeType),
+      size: Number(objectEntry.size) > 0 ? Math.round(Number(objectEntry.size)) : objectEntry.payload.byteLength,
+      body: objectEntry.payload,
     };
   }
 
