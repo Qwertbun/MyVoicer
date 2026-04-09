@@ -430,6 +430,13 @@
   --surface-opacity-light: 100%;
 }
 
+:root[data-bg-animation="off"] body::before,
+:root[data-bg-animation="off"] body::after,
+:root[data-bg-animation="off"] .discord-shell::before,
+:root[data-bg-animation="off"] .discord-shell::after {
+  display: none;
+}
+
 :root[data-bg-animation="aurora"] {
   --bg-layer-opacity: 0.58;
   --bg-layer-opacity-2: 0.38;

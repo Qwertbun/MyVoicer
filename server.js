@@ -29,6 +29,9 @@ const CHAT_STATE_FILE = path.join(CHAT_STATE_ROOT, "chat-history.json");
 const CHAT_STATE_VERSION = 1;
 const CHAT_STATE_SAVE_DEBOUNCE_MS = 180;
 const MAX_NOTIFICATION_WATCH_ROOMS = 24;
+const VERSION_QUERY_PATTERN = /(?:^|[?&])v=[^&]+/i;
+const STATIC_SHORT_CACHE_SECONDS = 600;
+const STATIC_LONG_CACHE_SECONDS = 31536000;
 const NETWORK_MODE_SERVER = "server";
 const NETWORK_MODE_P2P = "p2p";
 const NETWORK_MODE_RELAY = "relay";
@@ -69,10 +72,26 @@ let p2pMesh = null;
 let createP2PMesh = null;
 let relayUploadsManager = null;
 
+function setStaticCacheHeaders(res, absoluteFilePath) {
+  const extension = path.extname(absoluteFilePath).toLowerCase();
+  if (extension === ".html") {
+    res.setHeader("Cache-Control", "no-store");
+    return;
+  }
+
+  const requestUrl = String(res.req?.originalUrl || "");
+  if (VERSION_QUERY_PATTERN.test(requestUrl)) {
+    res.setHeader("Cache-Control", `public, max-age=${STATIC_LONG_CACHE_SECONDS}, immutable`);
+    return;
+  }
+
+  res.setHeader("Cache-Control", `public, max-age=${STATIC_SHORT_CACHE_SECONDS}`);
+}
+
 app.use(express.json({ limit: "256kb" }));
-app.use(express.static(PUBLIC_ROOT));
+app.use(express.static(PUBLIC_ROOT, { setHeaders: setStaticCacheHeaders }));
 if (SERVER_FILE_UPLOADS_ENABLED) {
-  app.use("/chat-uploads", express.static(CHAT_UPLOADS_ROOT));
+  app.use("/chat-uploads", express.static(CHAT_UPLOADS_ROOT, { setHeaders: setStaticCacheHeaders }));
 }
 
 const DEFAULT_STUN_URLS = [
