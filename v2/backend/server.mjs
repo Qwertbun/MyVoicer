@@ -66,6 +66,34 @@ let app = null;
 let serverStartPromise = null;
 let runtime = null;
 
+function resolveMaybeRelative(filePath) {
+  if (path.isAbsolute(filePath)) {
+    return filePath;
+  }
+  return path.join(PROJECT_ROOT, filePath);
+}
+
+function loadHttpsOptionsFromEnv() {
+  const sslKeyPath = process.env.SSL_KEY_PATH;
+  const sslCertPath = process.env.SSL_CERT_PATH;
+  const sslCaPath = process.env.SSL_CA_PATH;
+
+  if (!sslKeyPath || !sslCertPath) {
+    return null;
+  }
+
+  const options = {
+    key: fs.readFileSync(resolveMaybeRelative(sslKeyPath)),
+    cert: fs.readFileSync(resolveMaybeRelative(sslCertPath)),
+  };
+
+  if (sslCaPath) {
+    options.ca = fs.readFileSync(resolveMaybeRelative(sslCaPath));
+  }
+
+  return options;
+}
+
 function parseCsv(value) {
   return String(value || "")
     .split(",")
@@ -890,9 +918,13 @@ export async function startServer(options = {}) {
     return serverStartPromise;
   }
 
+  const httpsOptions = loadHttpsOptionsFromEnv();
+  const useTls = Boolean(httpsOptions);
+
   app = Fastify({
     logger: false,
     bodyLimit: 64 * 1024 * 1024,
+    ...(httpsOptions ? { https: httpsOptions } : {}),
   });
 
   await app.register(websocketPlugin);
@@ -913,7 +945,7 @@ export async function startServer(options = {}) {
     .then((address) => {
       const url = new URL(address);
       return {
-        protocol: url.protocol.replace(/:$/, ""),
+        protocol: useTls ? "https" : url.protocol.replace(/:$/, ""),
         host: url.hostname,
         port: Number(url.port),
         runtimeVersion: "v2",
