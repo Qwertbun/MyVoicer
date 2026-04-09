@@ -1,7 +1,27 @@
 const legacyScriptPromiseBySrc = new Map();
 
-function toVersionedSrc(src, version) {
+function toRootRelativeSrc(src) {
   const cleanSrc = String(src || "").trim();
+  if (!cleanSrc) {
+    return "";
+  }
+
+  if (
+    cleanSrc.startsWith("/") ||
+    cleanSrc.startsWith("http://") ||
+    cleanSrc.startsWith("https://") ||
+    cleanSrc.startsWith("//") ||
+    cleanSrc.startsWith("data:") ||
+    cleanSrc.startsWith("blob:")
+  ) {
+    return cleanSrc;
+  }
+
+  return `/${cleanSrc.replace(/^\.?\//, "")}`;
+}
+
+function toVersionedSrc(src, version) {
+  const cleanSrc = toRootRelativeSrc(src);
   if (!cleanSrc) {
     return "";
   }
