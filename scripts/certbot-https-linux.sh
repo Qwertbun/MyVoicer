@@ -10,6 +10,7 @@ EMAIL="${EMAIL:-}"
 PORT="${PORT:-3001}"
 HOST="${HOST:-0.0.0.0}"
 NETWORK_MODE="${NETWORK_MODE:-server}"
+RUNTIME_VERSION="${RUNTIME_VERSION:-v1}"
 STAGING="${STAGING:-0}"
 CERTBOT_BIN="${CERTBOT_BIN:-certbot}"
 CERT_SOURCE="${CERT_SOURCE:-auto}"
@@ -38,6 +39,8 @@ Environment:
   PORT           HTTPS backend port (default: 3001).
   HOST           Backend bind host (default: 0.0.0.0).
   NETWORK_MODE   server | p2p | relay (default: server).
+  RUNTIME_VERSION
+                v1 | v2 (default: v1).
   STAGING        1 to use Let's Encrypt staging endpoint (default: 0).
   CERTBOT_BIN    Certbot command name/path (default: certbot).
   CERT_SOURCE    auto | repo | system (default: auto).
@@ -78,6 +81,16 @@ normalize_cert_source() {
     auto|repo|system) echo "${1}" ;;
     *)
       echo "[certbot-linux] invalid CERT_SOURCE='${1}'. Allowed: auto, repo, system." >&2
+      exit 1
+      ;;
+  esac
+}
+
+normalize_runtime_version() {
+  case "${1}" in
+    v1|v2) echo "${1}" ;;
+    *)
+      echo "[certbot-linux] invalid RUNTIME_VERSION='${1}'. Allowed: v1, v2." >&2
       exit 1
       ;;
   esac
@@ -270,8 +283,10 @@ resolve_certificate_paths() {
 start_https_backend() {
   local normalized_mode
   local normalized_cert_source
+  local normalized_runtime_version
   normalized_mode="$(normalize_network_mode "$NETWORK_MODE")"
   normalized_cert_source="$(normalize_cert_source "$CERT_SOURCE")"
+  normalized_runtime_version="$(normalize_runtime_version "$RUNTIME_VERSION")"
 
   local resolved_pair
   resolved_pair="$(resolve_certificate_paths "$normalized_cert_source")"
@@ -286,14 +301,15 @@ start_https_backend() {
     exit 1
   fi
 
-  echo "[certbot-linux] starting HTTPS backend on ${HOST}:${PORT} (mode=${normalized_mode})"
+  echo "[certbot-linux] starting HTTPS backend on ${HOST}:${PORT} (mode=${normalized_mode}, runtime=${normalized_runtime_version})"
   export SSL_CERT_PATH="$cert_path"
   export SSL_KEY_PATH="$key_path"
   export PORT="$PORT"
   export HOST="$HOST"
   export NETWORK_MODE="$normalized_mode"
+  export RUNTIME_VERSION="$normalized_runtime_version"
 
-  exec node "$REPO_ROOT/scripts/run-web-server.js" "$normalized_mode"
+  exec node "$REPO_ROOT/scripts/run-web-server.js" "$normalized_mode" "--runtime-version=${normalized_runtime_version}"
 }
 
 auto_update_repo_from_git() {
