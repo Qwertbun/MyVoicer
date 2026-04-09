@@ -1,6 +1,31 @@
 const RELAY_CHUNK_SIZE_BYTES_FALLBACK = 16 * 1024 * 1024;
+const NETWORK_MODE_CACHE_TTL_MS = 15 * 1000;
 const relayUploadUrlPartMeta = new Map();
 const relayUploadedEtagsBySession = new Map();
+let networkModeCacheEntry = null;
+let networkModeFetchInFlight = null;
+
+function buildJsonResponse(payload, { status = 200, statusText = "OK" } = {}) {
+  return new Response(JSON.stringify(payload), {
+    status,
+    statusText,
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "no-store",
+    },
+  });
+}
+
+function hasApiPathHint(urlText) {
+  const clean = String(urlText || "").trim();
+  if (!clean) {
+    return false;
+  }
+  if (clean.startsWith("/api/")) {
+    return true;
+  }
+  return clean.includes("/api/");
+}
 
 function normalizeUrlKey(urlText) {
   const raw = String(urlText || "").trim();
@@ -293,6 +318,7 @@ export function installV1CompatFetchBridge() {
   }
 
   const nativeFetch = window.fetch.bind(window);
+  const currentOrigin = window.location.origin;
 
   window.fetch = async (input, init = {}) => {
     const urlText = typeof input === "string" ? input : input?.url;
@@ -300,11 +326,22 @@ export function installV1CompatFetchBridge() {
       return nativeFetch(input, init);
     }
 
-    const url = new URL(urlText, window.location.origin);
+    const method = String(init?.method || input?.method || "GET").trim().toUpperCase() || "GET";
+    if (method !== "PUT" && !hasApiPathHint(urlText)) {
+      return nativeFetch(input, init);
+    }
+
+    let url = null;
+    try {
+      url = new URL(urlText, currentOrigin);
+    } catch {
+      return nativeFetch(input, init);
+    }
+
     const knownUploadPart = relayUploadUrlPartMeta.get(normalizeUrlKey(url.toString()));
     if (
       knownUploadPart
-      && String(init?.method || "GET").trim().toUpperCase() === "PUT"
+      && method === "PUT"
     ) {
       const response = await nativeFetch(input, init);
       if (response.ok) {
@@ -314,26 +351,64 @@ export function installV1CompatFetchBridge() {
       return response;
     }
 
+    if (url.origin !== currentOrigin) {
+      return nativeFetch(input, init);
+    }
+
     if (url.pathname === "/api/network-mode") {
-      const response = await nativeFetch("/api/v2/network-mode", init);
-      const payload = await parseJsonResponse(response);
-      if (!payload || typeof payload !== "object") {
-        return response;
+      const now = Date.now();
+      if (networkModeCacheEntry && networkModeCacheEntry.expiresAt > now) {
+        return buildJsonResponse(networkModeCacheEntry.payload, {
+          status: networkModeCacheEntry.status,
+          statusText: networkModeCacheEntry.statusText,
+        });
       }
-      return buildJsonResponseFrom(response, mapNetworkModeResponse(payload));
+
+      if (!networkModeFetchInFlight) {
+        networkModeFetchInFlight = (async () => {
+          const response = await nativeFetch("/api/v2/network-mode", init);
+          const payload = await parseJsonResponse(response.clone());
+          if (!payload || typeof payload !== "object") {
+            return null;
+          }
+
+          const mappedPayload = mapNetworkModeResponse(payload);
+          const entry = {
+            payload: mappedPayload,
+            status: response.status,
+            statusText: response.statusText,
+            expiresAt: Date.now() + NETWORK_MODE_CACHE_TTL_MS,
+          };
+          if (response.ok) {
+            networkModeCacheEntry = entry;
+          } else {
+            networkModeCacheEntry = null;
+          }
+          return entry;
+        })()
+          .catch(() => null)
+          .finally(() => {
+            networkModeFetchInFlight = null;
+          });
+      }
+
+      const entry = await networkModeFetchInFlight;
+      if (entry) {
+        return buildJsonResponse(entry.payload, {
+          status: entry.status,
+          statusText: entry.statusText,
+        });
+      }
+
+      return nativeFetch("/api/v2/network-mode", init);
     }
 
     if (url.pathname === "/api/notifications/check") {
-      return new Response(
-        JSON.stringify({
-          rooms: [],
-        }),
+      return buildJsonResponse(
         {
-          status: 200,
-          headers: {
-            "content-type": "application/json; charset=utf-8",
-          },
-        }
+          rooms: [],
+        },
+        { status: 200, statusText: "OK" }
       );
     }
 
