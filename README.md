@@ -14,6 +14,7 @@ MVP voice messenger with server + voice-room host election:
 - Socket.IO (signaling)
 - WebRTC (audio)
 - Electron (desktop shell + auto updates)
+- V2 runtime (parallel): TypeScript contracts + Fastify + raw WebSocket + PostgreSQL/Redis/S3 adapters
 
 ## Run
 1. Install dependencies:
@@ -27,6 +28,12 @@ Additional backend modes:
 - `npm run start:web:p2p`
 - `npm run start:web:relay`
 - `npm run start:web:raw` (uses current `NETWORK_MODE` env or defaults to `server`)
+
+V2 backend/runtime (breaking wire protocol):
+- `npm run start:web:v2`
+- `npm run start:web:v2:p2p`
+- `npm run start:web:v2:relay`
+- direct flag form: `node scripts/run-web-server.js server --runtime-version=v2`
 
 Windows-only legacy launcher with predefined TLS/TURN env:
 - `npm run start:web:ps1`
@@ -65,6 +72,10 @@ P2P diagnostics endpoint:
 2. Start desktop app:
    npm start
 
+Desktop V2 entry:
+- `npm run start:electron:v2`
+- or pass CLI flag manually: `npm start -- --runtime-version=v2`
+
 Default Electron backend URL:
 - `https://lan.mine-souls.ru:3001`
 - this URL is used automatically if no `--backend-url=...` and no remote backend env override are provided.
@@ -86,7 +97,7 @@ Desktop startup order:
 1. Start app process
 2. Check updates from GitHub repository
 3. Show `hexagon-loading` splash screen
-4. Open main app (`index.html`) in Electron window
+4. Open runtime entry in Electron window (`/index.html` for V1, `/v2` for V2)
 
 ## Auto-update and Release
 - Auto-update is configured through `electron-updater` + GitHub Releases.

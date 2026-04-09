@@ -3,6 +3,7 @@
 const path = require("path");
 const net = require("net");
 const fs = require("fs");
+const { pathToFileURL } = require("url");
 const { Notification, app, BrowserWindow, desktopCapturer, ipcMain, shell } = require("electron");
 
 const DEFAULT_PORT = Number(process.env.ELECTRON_INTERNAL_PORT || 3000);
@@ -18,10 +19,14 @@ const MAIN_PAGE_LOAD_TIMEOUT_MS = Number(process.env.MAIN_PAGE_LOAD_TIMEOUT_MS |
 const MAIN_PAGE_RETRY_DELAY_MS = Number(process.env.MAIN_PAGE_RETRY_DELAY_MS || 700);
 const DESKTOP_SETTINGS_FILE_NAME = "desktop-settings.json";
 const NETWORK_MODE_ENV_KEY = "NETWORK_MODE";
+const RUNTIME_VERSION_ENV_KEY = "RUNTIME_VERSION";
 const NETWORK_MODE_SERVER = "server";
 const NETWORK_MODE_P2P = "p2p";
 const NETWORK_MODE_RELAY = "relay";
+const RUNTIME_VERSION_V1 = "v1";
+const RUNTIME_VERSION_V2 = "v2";
 const BOOT_ENV_NETWORK_MODE_RAW = String(process.env[NETWORK_MODE_ENV_KEY] || "").trim();
+const BOOT_ENV_RUNTIME_VERSION_RAW = String(process.env[RUNTIME_VERSION_ENV_KEY] || "").trim();
 const P2P_BOOTSTRAP_ENV_KEYS = [
   "P2P_BOOTSTRAP",
   "SYNTO_P2P_BOOTSTRAP",
@@ -49,6 +54,7 @@ let backendUrl = "";
 let shutdownInProgress = false;
 let startServer = null;
 let stopServer = null;
+let loadedRuntimeVersion = "";
 let pendingNotificationActivationPayload = null;
 let preparedDisplayCapture = null;
 const SESSION_PERMISSIONS_KEY = "__syntoPermissionsConfigured";
@@ -146,8 +152,20 @@ function normalizeEmbeddedNetworkMode(value) {
   return NETWORK_MODE_SERVER;
 }
 
+function normalizeRuntimeVersion(value) {
+  const clean = String(value || "").trim().toLowerCase();
+  if (clean === RUNTIME_VERSION_V2) {
+    return RUNTIME_VERSION_V2;
+  }
+  return RUNTIME_VERSION_V1;
+}
+
 function hasExplicitEnvironmentNetworkMode() {
   return BOOT_ENV_NETWORK_MODE_RAW !== "";
+}
+
+function hasExplicitEnvironmentRuntimeVersion() {
+  return BOOT_ENV_RUNTIME_VERSION_RAW !== "";
 }
 
 function getDesktopSettingsPath() {
@@ -166,6 +184,7 @@ function loadDesktopSettings() {
 
     return {
       networkMode: normalizeEmbeddedNetworkMode(parsed.networkMode),
+      runtimeVersion: normalizeRuntimeVersion(parsed.runtimeVersion),
     };
   } catch {
     return {};
@@ -176,6 +195,7 @@ function saveDesktopSettings(nextSettings = {}) {
   const filePath = getDesktopSettingsPath();
   const payload = {
     networkMode: normalizeEmbeddedNetworkMode(nextSettings.networkMode),
+    runtimeVersion: normalizeRuntimeVersion(nextSettings.runtimeVersion),
   };
 
   ensureDirectorySafe(path.dirname(filePath));
@@ -203,6 +223,18 @@ function getCliP2PBootstrapArgument() {
       continue;
     }
     return text.slice("--p2p-bootstrap=".length).trim();
+  }
+  return "";
+}
+
+function getCliRuntimeVersionArgument() {
+  const args = Array.isArray(process.argv) ? process.argv : [];
+  for (const arg of args) {
+    const text = String(arg || "").trim();
+    if (!text.toLowerCase().startsWith("--runtime-version=")) {
+      continue;
+    }
+    return text.slice("--runtime-version=".length).trim();
   }
   return "";
 }
@@ -280,6 +312,28 @@ function resolveEmbeddedNetworkMode() {
   return normalizeEmbeddedNetworkMode(settings.networkMode);
 }
 
+function hasExplicitCliRuntimeVersion() {
+  return getCliRuntimeVersionArgument() !== "";
+}
+
+function hasExplicitRuntimeVersionOverride() {
+  return hasExplicitEnvironmentRuntimeVersion() || hasExplicitCliRuntimeVersion();
+}
+
+function resolveEmbeddedRuntimeVersion() {
+  const cliValue = getCliRuntimeVersionArgument();
+  if (cliValue) {
+    return normalizeRuntimeVersion(cliValue);
+  }
+
+  if (hasExplicitEnvironmentRuntimeVersion()) {
+    return normalizeRuntimeVersion(BOOT_ENV_RUNTIME_VERSION_RAW);
+  }
+
+  const settings = loadDesktopSettings();
+  return normalizeRuntimeVersion(settings.runtimeVersion);
+}
+
 function getEmbeddedNetworkModeState() {
   return {
     mode: resolveEmbeddedNetworkMode(),
@@ -288,13 +342,23 @@ function getEmbeddedNetworkModeState() {
   };
 }
 
-function buildMainPageUrl(baseUrl) {
-  const normalizedBaseUrl = normalizeConfiguredBackendUrl(baseUrl);
-  return new URL("./index.html", `${normalizedBaseUrl}/`).toString();
+function getRuntimeInfoState() {
+  return {
+    runtimeVersion: resolveEmbeddedRuntimeVersion(),
+    networkMode: resolveEmbeddedNetworkMode(),
+    remoteBackendConfigured: Boolean(resolveConfiguredBackendUrl()),
+    environmentLocked: hasExplicitRuntimeVersionOverride(),
+  };
 }
 
-function ensureBackendLoaded() {
-  if (startServer && stopServer) {
+function buildMainPageUrl(baseUrl, runtimeVersion = RUNTIME_VERSION_V1) {
+  const normalizedBaseUrl = normalizeConfiguredBackendUrl(baseUrl);
+  const pagePath = runtimeVersion === RUNTIME_VERSION_V2 ? "./v2" : "./index.html";
+  return new URL(pagePath, `${normalizedBaseUrl}/`).toString();
+}
+
+async function ensureBackendLoaded(runtimeVersion = RUNTIME_VERSION_V1) {
+  if (startServer && stopServer && loadedRuntimeVersion === runtimeVersion) {
     return;
   }
 
@@ -302,7 +366,9 @@ function ensureBackendLoaded() {
   process.env.CHAT_UPLOADS_ROOT = path.join(runtimeRoot, "chat-uploads");
   process.env.CHAT_STATE_ROOT = path.join(runtimeRoot, "data");
   process.env[NETWORK_MODE_ENV_KEY] = resolveEmbeddedNetworkMode();
+  process.env[RUNTIME_VERSION_ENV_KEY] = runtimeVersion;
   console.log(`[main] embedded network mode: ${process.env[NETWORK_MODE_ENV_KEY]}`);
+  console.log(`[main] runtime version: ${runtimeVersion}`);
 
   const bootstrapNodes = resolveConfiguredP2PBootstrap();
   if (bootstrapNodes.length > 0) {
@@ -310,9 +376,15 @@ function ensureBackendLoaded() {
     console.log(`[main] p2p bootstrap override: ${process.env.P2P_BOOTSTRAP}`);
   }
 
-  const backend = require("../server");
+  const backend = runtimeVersion === RUNTIME_VERSION_V2
+    ? await import(
+      pathToFileURL(path.join(__dirname, "..", "v2", "backend", "server.mjs")).href
+    )
+    : require("../server");
+
   startServer = backend.startServer;
   stopServer = backend.stopServer;
+  loadedRuntimeVersion = runtimeVersion;
 }
 
 function findOpenPort(startPort) {
@@ -719,12 +791,13 @@ async function launchMainFlow() {
   createSplashWindow();
   const splashShownAt = Date.now();
   const configuredBackendUrl = resolveConfiguredBackendUrl();
+  const runtimeVersion = resolveEmbeddedRuntimeVersion();
 
   if (configuredBackendUrl) {
     backendUrl = configuredBackendUrl;
-    console.log(`[main] remote backend mode: ${backendUrl}`);
+    console.log(`[main] remote backend mode (${runtimeVersion}): ${backendUrl}`);
   } else {
-    ensureBackendLoaded();
+    await ensureBackendLoaded(runtimeVersion);
 
     const port = await findOpenPort(DEFAULT_PORT);
     const startedServer = await startServer({
@@ -736,7 +809,7 @@ async function launchMainFlow() {
   }
 
   createMainWindow();
-  const mainPageUrl = buildMainPageUrl(backendUrl);
+  const mainPageUrl = buildMainPageUrl(backendUrl, runtimeVersion);
   try {
     await loadMainPageWithRetries(mainWindow, mainPageUrl);
   } catch (error) {
@@ -767,6 +840,10 @@ async function shutdownBackend() {
   } catch (error) {
     console.warn(`[server] stop failed: ${error && error.message ? error.message : String(error)}`);
   }
+
+  startServer = null;
+  stopServer = null;
+  loadedRuntimeVersion = "";
 }
 
 function getWindowForEvent(event) {
@@ -781,6 +858,7 @@ function getWindowForEvent(event) {
 }
 
 ipcMain.handle("app:get-network-mode", () => getEmbeddedNetworkModeState());
+ipcMain.handle("v2:app:get-runtime-info", () => getRuntimeInfoState());
 ipcMain.handle("screen:list-display-sources", async () => {
   try {
     return await listDisplaySources();
@@ -849,6 +927,46 @@ ipcMain.handle("app:set-network-mode", async (_event, nextMode) => {
     mode: normalizedMode,
     remoteBackendConfigured: false,
     environmentLocked: false,
+  };
+});
+ipcMain.handle("v2:app:set-runtime-version", async (_event, nextRuntimeVersion) => {
+  const currentState = getRuntimeInfoState();
+  if (currentState.environmentLocked) {
+    return {
+      ok: false,
+      changed: false,
+      restarting: false,
+      runtimeVersion: currentState.runtimeVersion,
+      reason: "environment-locked",
+    };
+  }
+
+  const normalizedRuntimeVersion = normalizeRuntimeVersion(nextRuntimeVersion);
+  if (normalizedRuntimeVersion === currentState.runtimeVersion) {
+    return {
+      ok: true,
+      changed: false,
+      restarting: false,
+      runtimeVersion: currentState.runtimeVersion,
+    };
+  }
+
+  saveDesktopSettings({
+    ...loadDesktopSettings(),
+    runtimeVersion: normalizedRuntimeVersion,
+  });
+
+  await shutdownBackend();
+  app.relaunch();
+  setTimeout(() => {
+    app.exit(0);
+  }, 50);
+
+  return {
+    ok: true,
+    changed: true,
+    restarting: true,
+    runtimeVersion: normalizedRuntimeVersion,
   };
 });
 ipcMain.handle("window:minimize", (event) => {
@@ -930,7 +1048,10 @@ app.whenReady().then(async () => {
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0 && backendUrl) {
       createMainWindow();
-      loadMainPageWithRetries(mainWindow, buildMainPageUrl(backendUrl)).catch((error) => {
+      loadMainPageWithRetries(
+        mainWindow,
+        buildMainPageUrl(backendUrl, resolveEmbeddedRuntimeVersion())
+      ).catch((error) => {
         console.error(`[main] failed to re-open window: ${error.message}`);
       });
       revealMainWindow();

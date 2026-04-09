@@ -9,6 +9,7 @@ const {
   RELAY_V2_MAX_FILE_BYTES,
   RELAY_V2_MAX_TOTAL_MESSAGE_BYTES,
 } = require("./relay_uploads");
+const { createRelayEnvelopeUtils } = require("./server/relay-envelope-utils");
 
 const app = express();
 const rooms = new Map();
@@ -44,13 +45,7 @@ const SERVER_FILE_UPLOADS_ENABLED = !RELAY_MODE_ENABLED;
 const RELAY_MAX_HISTORY_ENVELOPES = 500;
 const RELAY_MAX_HISTORY_BYTES = 64 * 1024 * 1024;
 const RELAY_MAX_ENVELOPE_CIPHERTEXT_BYTES = 2 * 1024 * 1024;
-const RELAY_MAX_ATTACHMENT_PAYLOAD_CIPHERTEXT_BYTES = SOCKET_MAX_HTTP_BUFFER_SIZE;
-const RELAY_MAX_ATTACHMENT_CHUNK_TEXT_BYTES = 12 * 1024 * 1024;
 const RELAY_ATTACHMENT_TRANSPORT_S3_V2 = "s3-v2";
-const RELAY_LEGACY_ATTACHMENT_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
-const RELAY_LEGACY_ATTACHMENT_CACHE_MAX_ENTRIES = 64;
-const RELAY_LEGACY_ATTACHMENT_CACHE_MAX_BYTES = 256 * 1024 * 1024;
-const RELAY_SERVER_ATTACHMENT_CHUNK_TEXT_BYTES = 512 * 1024;
 const CHAT_MIME_EXTENSION_FALLBACKS = Object.freeze({
   "image/jpeg": "jpg",
   "image/png": "png",
@@ -73,8 +68,6 @@ let chatStateSaveChain = Promise.resolve();
 let p2pMesh = null;
 let createP2PMesh = null;
 let relayUploadsManager = null;
-let relayLegacyAttachmentCacheBytes = 0;
-const relayLegacyAttachmentCache = new Map();
 
 app.use(express.json({ limit: "256kb" }));
 app.use(express.static(PUBLIC_ROOT));
@@ -732,6 +725,23 @@ function normalizeChatStorageRoomId(roomId) {
   return normalized || "room";
 }
 
+const {
+  normalizeRelayString,
+  normalizeRelayRoomId,
+  estimatePayloadBytes,
+  sanitizeRelayAttachmentRef,
+  sanitizeRelayEnvelope,
+} = createRelayEnvelopeUtils({
+  maxChatAttachments: MAX_CHAT_ATTACHMENTS,
+  relayAttachmentTransportS3V2: RELAY_ATTACHMENT_TRANSPORT_S3_V2,
+  relayV2MaxFileBytes: RELAY_V2_MAX_FILE_BYTES,
+  relayV2MaxTotalMessageBytes: RELAY_V2_MAX_TOTAL_MESSAGE_BYTES,
+  relayMaxEnvelopeCiphertextBytes: RELAY_MAX_ENVELOPE_CIPHERTEXT_BYTES,
+  normalizeRoomIdValue,
+  normalizeChatAttachmentMimeType,
+  normalizeChatStorageRoomId,
+});
+
 function parseChatAttachmentDataUrl(value) {
   const raw = String(value || "").trim();
   const match = /^data:([^;,]*);base64,([a-zA-Z0-9+/=\s]+)$/.exec(raw);
@@ -1308,384 +1318,6 @@ function sendAck(callback, payload) {
   if (typeof callback === "function") {
     callback(payload);
   }
-}
-
-function normalizeRelayString(value, maxLength = 256) {
-  return String(value || "").trim().slice(0, maxLength);
-}
-
-function normalizeRelayCiphertext(value, maxBytes = 0) {
-  const text = String(value || "").trim();
-  if (!text) {
-    return "";
-  }
-
-  const normalizedMaxBytes = Number(maxBytes);
-  if (Number.isFinite(normalizedMaxBytes) && normalizedMaxBytes > 0) {
-    const byteLength = Buffer.byteLength(text, "utf8");
-    if (byteLength > normalizedMaxBytes) {
-      return "";
-    }
-  }
-
-  return text;
-}
-
-function normalizeRelayRoomId(value) {
-  const cleanRoomId = normalizeRoomIdValue(value);
-  if (!cleanRoomId || cleanRoomId.toLowerCase() === "main") {
-    return "";
-  }
-  return cleanRoomId;
-}
-
-function estimatePayloadBytes(value) {
-  try {
-    return Buffer.byteLength(JSON.stringify(value ?? null), "utf8");
-  } catch {
-    return 0;
-  }
-}
-
-function sanitizeRelayAttachmentRef(value = {}) {
-  const messageId = normalizeRelayString(value.messageId, 96);
-  const attachmentId = normalizeRelayString(value.attachmentId, 96);
-  const name = normalizeRelayString(value.name, 120);
-  const mimeType = normalizeChatAttachmentMimeType(value.mimeType);
-  const size = Number(value.size);
-  const transport = normalizeRelayString(value.transport, 24).toLowerCase();
-  const objectKey = normalizeRelayString(value.objectKey, 512);
-  if (!messageId || !attachmentId) {
-    return null;
-  }
-  const normalizedSize = Number.isFinite(size) && size >= 0 ? Math.round(size) : 0;
-  if (normalizedSize > RELAY_V2_MAX_FILE_BYTES) {
-    return null;
-  }
-
-  if (transport === RELAY_ATTACHMENT_TRANSPORT_S3_V2 && !objectKey) {
-    return null;
-  }
-
-  return {
-    messageId,
-    attachmentId,
-    transport: transport === RELAY_ATTACHMENT_TRANSPORT_S3_V2
-      ? RELAY_ATTACHMENT_TRANSPORT_S3_V2
-      : "",
-    objectKey: transport === RELAY_ATTACHMENT_TRANSPORT_S3_V2 ? objectKey : "",
-    name: name || "file",
-    mimeType,
-    size: normalizedSize,
-  };
-}
-
-function sanitizeRelayEnvelope(value = {}) {
-  if (!value || typeof value !== "object") {
-    return null;
-  }
-
-  const roomId = normalizeRelayRoomId(value.roomId);
-  const messageId = normalizeRelayString(value.messageId, 96);
-  const senderId = normalizeRelayString(value.senderId, 96);
-  const createdAt = Number(value.createdAt);
-  const v = Number(value.v);
-  const alg = normalizeRelayString(value.alg, 24);
-  const iv = normalizeRelayString(value.iv, 128);
-  const transportVersionRaw = Number(value.transportVersion);
-  const transportVersion = transportVersionRaw === 2 ? 2 : 1;
-  const ciphertext = normalizeRelayCiphertext(
-    value.ciphertext,
-    RELAY_MAX_ENVELOPE_CIPHERTEXT_BYTES
-  );
-
-  if (!roomId || !messageId || !senderId) {
-    return null;
-  }
-  if (!Number.isFinite(createdAt) || createdAt <= 0) {
-    return null;
-  }
-  if (v !== 1 || alg !== "AES-GCM-256") {
-    return null;
-  }
-  if (!iv || !ciphertext) {
-    return null;
-  }
-
-  const attachmentRefs = Array.isArray(value.attachmentRefs)
-    ? value.attachmentRefs
-        .map((item) => sanitizeRelayAttachmentRef(item))
-        .filter(Boolean)
-        .slice(0, MAX_CHAT_ATTACHMENTS)
-    : [];
-  const roomStoragePrefix = `relay-v2/${normalizeChatStorageRoomId(roomId)}/`;
-  const hasInvalidV2Ref = attachmentRefs.some(
-    (item) =>
-      item?.transport === RELAY_ATTACHMENT_TRANSPORT_S3_V2
-      && (!item.objectKey || !String(item.objectKey).startsWith(roomStoragePrefix))
-  );
-  if (hasInvalidV2Ref) {
-    return null;
-  }
-  const totalAttachmentSize = attachmentRefs.reduce(
-    (acc, item) => acc + (Number(item?.size) || 0),
-    0
-  );
-  if (totalAttachmentSize > RELAY_V2_MAX_TOTAL_MESSAGE_BYTES) {
-    return null;
-  }
-
-  return {
-    v,
-    alg,
-    transportVersion,
-    roomId,
-    messageId,
-    senderId,
-    createdAt: Math.round(createdAt),
-    iv,
-    ciphertext,
-    attachmentRefs,
-  };
-}
-
-function sanitizeRelayAttachmentPayload(value = {}) {
-  if (!value || typeof value !== "object") {
-    return null;
-  }
-
-  const attachmentId = normalizeRelayString(value.attachmentId, 96);
-  const messageId = normalizeRelayString(value.messageId, 96);
-  const iv = normalizeRelayString(value.iv, 128);
-  const ciphertext = normalizeRelayCiphertext(
-    value.ciphertext,
-    RELAY_MAX_ATTACHMENT_PAYLOAD_CIPHERTEXT_BYTES
-  );
-  const name = normalizeRelayString(value.name, 120);
-  const mimeType = normalizeChatAttachmentMimeType(value.mimeType);
-  const size = Number(value.size);
-
-  if (!attachmentId || !messageId || !iv || !ciphertext) {
-    return null;
-  }
-
-  const normalizedSize = Number.isFinite(size) && size >= 0 ? Math.round(size) : 0;
-  return {
-    attachmentId,
-    messageId,
-    iv,
-    ciphertext,
-    name: name || "file",
-    mimeType,
-    size: normalizedSize,
-  };
-}
-
-function estimateRelayLegacyAttachmentEntryBytes(entry = {}) {
-  return Buffer.byteLength(String(entry?.ciphertext || ""), "utf8")
-    + Buffer.byteLength(String(entry?.iv || ""), "utf8")
-    + Buffer.byteLength(String(entry?.name || ""), "utf8")
-    + Buffer.byteLength(String(entry?.mimeType || ""), "utf8")
-    + 256;
-}
-
-function buildRelayLegacyAttachmentCacheKey(roomId, messageId, attachmentId) {
-  return `${normalizeRelayRoomId(roomId)}:${normalizeRelayString(messageId, 96)}:${normalizeRelayString(attachmentId, 96)}`;
-}
-
-function deleteRelayLegacyAttachmentCacheKey(key) {
-  const cleanKey = String(key || "").trim();
-  if (!cleanKey || !relayLegacyAttachmentCache.has(cleanKey)) {
-    return;
-  }
-  const existing = relayLegacyAttachmentCache.get(cleanKey);
-  relayLegacyAttachmentCache.delete(cleanKey);
-  relayLegacyAttachmentCacheBytes = Math.max(
-    0,
-    relayLegacyAttachmentCacheBytes - (Number(existing?.approxBytes) || 0)
-  );
-}
-
-function pruneRelayLegacyAttachmentCache() {
-  if (relayLegacyAttachmentCache.size === 0) {
-    return;
-  }
-
-  const now = Date.now();
-  for (const [key, entry] of relayLegacyAttachmentCache.entries()) {
-    if (!entry || !Number.isFinite(entry.storedAt) || now - entry.storedAt > RELAY_LEGACY_ATTACHMENT_CACHE_TTL_MS) {
-      deleteRelayLegacyAttachmentCacheKey(key);
-    }
-  }
-
-  while (
-    relayLegacyAttachmentCache.size > RELAY_LEGACY_ATTACHMENT_CACHE_MAX_ENTRIES
-    || relayLegacyAttachmentCacheBytes > RELAY_LEGACY_ATTACHMENT_CACHE_MAX_BYTES
-  ) {
-    const oldestKey = relayLegacyAttachmentCache.keys().next().value;
-    if (!oldestKey) {
-      break;
-    }
-    deleteRelayLegacyAttachmentCacheKey(oldestKey);
-  }
-}
-
-function rememberRelayLegacyAttachmentPayload(roomId, payload) {
-  const cleanRoomId = normalizeRelayRoomId(roomId);
-  const normalizedPayload = sanitizeRelayAttachmentPayload(payload);
-  if (!cleanRoomId || !normalizedPayload) {
-    return;
-  }
-  const cacheKey = buildRelayLegacyAttachmentCacheKey(
-    cleanRoomId,
-    normalizedPayload.messageId,
-    normalizedPayload.attachmentId
-  );
-  if (!cacheKey) {
-    return;
-  }
-
-  const approxBytes = estimateRelayLegacyAttachmentEntryBytes(normalizedPayload);
-  deleteRelayLegacyAttachmentCacheKey(cacheKey);
-  relayLegacyAttachmentCache.set(cacheKey, {
-    ...normalizedPayload,
-    roomId: cleanRoomId,
-    storedAt: Date.now(),
-    approxBytes,
-  });
-  relayLegacyAttachmentCacheBytes += approxBytes;
-  pruneRelayLegacyAttachmentCache();
-}
-
-function rememberRelayLegacyAttachmentPayloads(roomId, payloads = []) {
-  if (!Array.isArray(payloads) || payloads.length === 0) {
-    return;
-  }
-  for (const payload of payloads) {
-    rememberRelayLegacyAttachmentPayload(roomId, payload);
-  }
-}
-
-function getRelayLegacyAttachmentPayload(roomId, attachmentRef) {
-  const cleanRoomId = normalizeRelayRoomId(roomId);
-  const cleanMessageId = normalizeRelayString(attachmentRef?.messageId, 96);
-  const cleanAttachmentId = normalizeRelayString(attachmentRef?.attachmentId, 96);
-  if (!cleanRoomId || !cleanMessageId || !cleanAttachmentId) {
-    return null;
-  }
-
-  pruneRelayLegacyAttachmentCache();
-  const cacheKey = buildRelayLegacyAttachmentCacheKey(cleanRoomId, cleanMessageId, cleanAttachmentId);
-  const entry = relayLegacyAttachmentCache.get(cacheKey);
-  if (!entry) {
-    return null;
-  }
-
-  if (!Number.isFinite(entry.storedAt) || Date.now() - entry.storedAt > RELAY_LEGACY_ATTACHMENT_CACHE_TTL_MS) {
-    deleteRelayLegacyAttachmentCacheKey(cacheKey);
-    return null;
-  }
-
-  const refreshed = {
-    ...entry,
-    storedAt: Date.now(),
-  };
-  relayLegacyAttachmentCache.delete(cacheKey);
-  relayLegacyAttachmentCache.set(cacheKey, refreshed);
-  return refreshed;
-}
-
-function splitRelayCiphertextForServerResponse(ciphertext) {
-  const cleanCiphertext = String(ciphertext || "");
-  if (!cleanCiphertext) {
-    return [];
-  }
-  const chunks = [];
-  for (let offset = 0; offset < cleanCiphertext.length; offset += RELAY_SERVER_ATTACHMENT_CHUNK_TEXT_BYTES) {
-    chunks.push(cleanCiphertext.slice(offset, offset + RELAY_SERVER_ATTACHMENT_CHUNK_TEXT_BYTES));
-  }
-  return chunks;
-}
-
-function emitRelayAttachmentPayloadFromServer({
-  roomId,
-  requestId,
-  targetId,
-  attachmentRef,
-  payload,
-}) {
-  const cleanRoomId = normalizeRelayRoomId(roomId);
-  const cleanRequestId = normalizeRelayString(requestId, 96);
-  const cleanTargetId = normalizeRelayString(targetId, 96);
-  const cleanAttachmentRef = sanitizeRelayAttachmentRef(attachmentRef);
-  const normalizedPayload = sanitizeRelayAttachmentPayload(payload);
-  if (!cleanRoomId || !cleanRequestId || !cleanTargetId || !cleanAttachmentRef || !normalizedPayload) {
-    return false;
-  }
-
-  const chunks = splitRelayCiphertextForServerResponse(normalizedPayload.ciphertext);
-  if (chunks.length === 0) {
-    return false;
-  }
-
-  const totalChunks = chunks.length;
-  for (let index = 0; index < chunks.length; index += 1) {
-    io.to(cleanTargetId).emit("relay-attachment-response", {
-      roomId: cleanRoomId,
-      requestId: cleanRequestId,
-      targetId: cleanTargetId,
-      sourceId: "relay-server",
-      attachmentRef: cleanAttachmentRef,
-      chunk: {
-        chunk: chunks[index],
-        chunkIndex: index,
-        totalChunks,
-        eof: index === chunks.length - 1,
-        iv: normalizedPayload.iv,
-        name: normalizedPayload.name,
-        mimeType: normalizedPayload.mimeType,
-        size: normalizedPayload.size,
-      },
-      error: "",
-    });
-  }
-  return true;
-}
-
-function sanitizeRelayAttachmentChunk(value = {}) {
-  if (!value || typeof value !== "object") {
-    return null;
-  }
-
-  const chunk = normalizeRelayCiphertext(value.chunk, RELAY_MAX_ATTACHMENT_CHUNK_TEXT_BYTES);
-  const chunkIndex = Number(value.chunkIndex);
-  const totalChunks = Number(value.totalChunks);
-  const iv = normalizeRelayString(value.iv, 128);
-  const name = normalizeRelayString(value.name, 120);
-  const mimeType = normalizeChatAttachmentMimeType(value.mimeType);
-  const size = Number(value.size);
-
-  if (!chunk) {
-    return null;
-  }
-
-  if (!Number.isFinite(chunkIndex) || chunkIndex < 0) {
-    return null;
-  }
-  if (!Number.isFinite(totalChunks) || totalChunks <= 0) {
-    return null;
-  }
-
-  return {
-    chunk,
-    chunkIndex: Math.round(chunkIndex),
-    totalChunks: Math.round(totalChunks),
-    eof: Boolean(value.eof),
-    iv,
-    name,
-    mimeType,
-    size: Number.isFinite(size) && size >= 0 ? Math.round(size) : 0,
-  };
 }
 
 if (SERVER_FILE_UPLOADS_ENABLED) {

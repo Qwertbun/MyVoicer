@@ -5,8 +5,9 @@ const electronBinary = require("electron");
 
 const childEnv = { ...process.env };
 delete childEnv.ELECTRON_RUN_AS_NODE;
+const forwardedArgs = process.argv.slice(2);
 
-const child = spawn(electronBinary, ["."], {
+const child = spawn(electronBinary, [".", ...forwardedArgs], {
   stdio: "inherit",
   env: childEnv,
 });

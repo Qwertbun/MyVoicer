@@ -5,6 +5,8 @@ const { contextBridge, ipcRenderer } = require("electron");
 contextBridge.exposeInMainWorld("desktopApp", {
   getNetworkMode: () => ipcRenderer.invoke("app:get-network-mode"),
   setNetworkMode: (mode) => ipcRenderer.invoke("app:set-network-mode", mode),
+  getRuntimeInfo: () => ipcRenderer.invoke("v2:app:get-runtime-info"),
+  setRuntimeVersion: (runtimeVersion) => ipcRenderer.invoke("v2:app:set-runtime-version", runtimeVersion),
   listDisplaySources: () => ipcRenderer.invoke("screen:list-display-sources"),
   prepareDisplayCapture: (payload) => ipcRenderer.invoke("screen:prepare-display-capture", payload),
   clearPreparedDisplayCapture: () => ipcRenderer.invoke("screen:clear-prepared-display-capture"),
