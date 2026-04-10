@@ -1321,25 +1321,27 @@ async function relayV2GetPartUploadUrl(roomId, sessionId, partNumber) {
 async function relayV2GetUploadStatus(roomId, sessionId) {
   const cleanRoomId = normalizeRoomIdValue(roomId);
   const token = await ensureRelayCapabilityToken(cleanRoomId);
-  let statusUrl = `/api/v2/relay/uploads/status?roomId=${encodeURIComponent(cleanRoomId)}&sessionId=${encodeURIComponent(sessionId)}&capability=${encodeURIComponent(token)}`;
+  let statusUrl = `/api/v2/relay/uploads/status?roomId=${encodeURIComponent(cleanRoomId)}&sessionId=${encodeURIComponent(sessionId)}&token=${encodeURIComponent(token)}`;
   let response = await fetch(
     statusUrl,
     {
       method: "GET",
       headers: {
         Authorization: `Bearer ${token}`,
+        "x-relay-capability-token": token,
       },
     }
   );
-  if (response.status === 401) {
+  if (response.status === 401 || response.status === 403) {
     const refreshed = await ensureRelayCapabilityToken(cleanRoomId, { forceRefresh: true });
-    statusUrl = `/api/v2/relay/uploads/status?roomId=${encodeURIComponent(cleanRoomId)}&sessionId=${encodeURIComponent(sessionId)}&capability=${encodeURIComponent(refreshed)}`;
+    statusUrl = `/api/v2/relay/uploads/status?roomId=${encodeURIComponent(cleanRoomId)}&sessionId=${encodeURIComponent(sessionId)}&token=${encodeURIComponent(refreshed)}`;
     response = await fetch(
       statusUrl,
       {
         method: "GET",
         headers: {
           Authorization: `Bearer ${refreshed}`,
+          "x-relay-capability-token": refreshed,
         },
       }
     );

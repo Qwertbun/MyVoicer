@@ -1017,12 +1017,14 @@ async function relayApiRequest(path, { method = "POST", body = null, roomId = ""
   const token = await ensureRelayCapabilityToken(cleanRoomId);
   const headers = {
     Authorization: `Bearer ${token}`,
+    "x-relay-capability-token": token,
   };
   let requestBody = null;
   let payloadBody = body;
   if (body && typeof body === "object") {
     payloadBody = {
       ...body,
+      token,
       capability: token,
     };
     headers["Content-Type"] = "application/json";
@@ -1043,10 +1045,12 @@ async function relayApiRequest(path, { method = "POST", body = null, roomId = ""
       headers: {
         ...headers,
         Authorization: `Bearer ${refreshed}`,
+        "x-relay-capability-token": refreshed,
       },
       body: payloadBody && typeof payloadBody === "object"
         ? JSON.stringify({
             ...payloadBody,
+            token: refreshed,
             capability: refreshed,
           })
         : requestBody,
