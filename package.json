@@ -7,7 +7,8 @@
     "server:https:relay": "NETWORK_MODE=relay RUNTIME_VERSION=v2 bash scripts/certbot-https-linux.sh start",
     "build:win": "node scripts/build-electron.js --win --publish never",
     "dev:electron": "node scripts/run-electron.js --runtime-version=v2",
-    "dev:web": "node scripts/run-web-server.js relay --runtime-version=v2"
+    "dev:web": "node scripts/run-web-server.js relay --runtime-version=v2",
+    "check:v2:frontend": "node scripts/check-v2-frontend-cutover.js"
   },
   "dependencies": {
     "@fastify/static": "^9.1.0",

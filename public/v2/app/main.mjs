@@ -1,42 +1,16 @@
-import { createBootstrap } from "./bootstrap.mjs";
+import { APP_BUILD_ID, FRONTEND_MODULE_MANIFEST } from "./build-info.mjs";
+import { showFrontendBootstrapError } from "./legacy-runtime.mjs";
+import { bootstrapReady } from "./bootstrap-loader.mjs";
 
-let dispose = null;
-
-if (window.desktopApp) {
-  document.body.classList.add("is-electron-runtime");
-
-  const minimizeBtn = document.getElementById("window-minimize-btn");
-  const closeBtn = document.getElementById("window-close-btn");
-
-  minimizeBtn?.addEventListener("click", () => {
-    const pending = window.desktopApp.minimizeWindow?.();
-    if (pending && typeof pending.catch === "function") {
-      pending.catch(() => {});
-    }
-  });
-
-  closeBtn?.addEventListener("click", () => {
-    const pending = window.desktopApp.closeWindow?.();
-    if (pending && typeof pending.catch === "function") {
-      pending.catch(() => {});
-    }
-  });
-}
+globalThis.__SYNTO_FRONTEND_BUILD__ = APP_BUILD_ID;
+globalThis.__SYNTO_FRONTEND_MODULES__ = FRONTEND_MODULE_MANIFEST.map((item) => ({ ...item }));
 
 try {
-  const bootstrap = createBootstrap();
-  dispose = bootstrap.start();
-  console.info("[v2] frontend bootstrap started");
+  await bootstrapReady;
+  console.info(
+    `[v2-loader:esm] loaded ${FRONTEND_MODULE_MANIFEST.length} modules (${APP_BUILD_ID})`
+  );
 } catch (error) {
-  console.error("[v2] bootstrap failed", error);
+  showFrontendBootstrapError("Failed to initialize frontend modules.", error);
+  throw error;
 }
-
-window.addEventListener("beforeunload", () => {
-  if (typeof dispose === "function") {
-    try {
-      dispose();
-    } catch {
-      // no-op
-    }
-  }
-});
