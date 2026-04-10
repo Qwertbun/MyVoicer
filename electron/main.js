@@ -23,7 +23,6 @@ const RUNTIME_VERSION_ENV_KEY = "RUNTIME_VERSION";
 const NETWORK_MODE_SERVER = "server";
 const NETWORK_MODE_P2P = "p2p";
 const NETWORK_MODE_RELAY = "relay";
-const RUNTIME_VERSION_V1 = "v1";
 const RUNTIME_VERSION_V2 = "v2";
 const BOOT_ENV_NETWORK_MODE_RAW = String(process.env[NETWORK_MODE_ENV_KEY] || "").trim();
 const BOOT_ENV_RUNTIME_VERSION_RAW = String(process.env[RUNTIME_VERSION_ENV_KEY] || "").trim();
@@ -41,6 +40,7 @@ const REMOTE_BACKEND_ENV_KEYS = [
   "ELECTRON_REMOTE_BACKEND_URL",
 ];
 const DEFAULT_REMOTE_BACKEND_URL = "https://lan.mine-souls.ru:3001";
+const REMOTE_HEALTHCHECK_TIMEOUT_MS = Number(process.env.REMOTE_HEALTHCHECK_TIMEOUT_MS || 2600);
 const APP_WINDOW_WIDTH = 1540;
 const APP_WINDOW_HEIGHT = 940;
 const APP_WINDOW_MIN_WIDTH = 1100;
@@ -153,11 +153,7 @@ function normalizeEmbeddedNetworkMode(value) {
 }
 
 function normalizeRuntimeVersion(value) {
-  const clean = String(value || "").trim().toLowerCase();
-  if (clean === RUNTIME_VERSION_V2) {
-    return RUNTIME_VERSION_V2;
-  }
-  return RUNTIME_VERSION_V1;
+  return RUNTIME_VERSION_V2;
 }
 
 function hasExplicitEnvironmentNetworkMode() {
@@ -279,7 +275,22 @@ function resolveConfiguredBackendUrl() {
     }
   }
 
-  return normalizeConfiguredBackendUrl(DEFAULT_REMOTE_BACKEND_URL);
+  return "";
+}
+
+function getRemoteBackendSelection() {
+  const explicitUrl = resolveConfiguredBackendUrl();
+  if (explicitUrl) {
+    return {
+      url: explicitUrl,
+      explicit: true,
+    };
+  }
+
+  return {
+    url: normalizeConfiguredBackendUrl(DEFAULT_REMOTE_BACKEND_URL),
+    explicit: false,
+  };
 }
 
 function resolveConfiguredP2PBootstrap() {
@@ -313,52 +324,43 @@ function resolveEmbeddedNetworkMode() {
 }
 
 function hasExplicitCliRuntimeVersion() {
-  return getCliRuntimeVersionArgument() !== "";
+  return false;
 }
 
 function hasExplicitRuntimeVersionOverride() {
-  return hasExplicitEnvironmentRuntimeVersion() || hasExplicitCliRuntimeVersion();
+  return true;
 }
 
 function resolveEmbeddedRuntimeVersion() {
-  const cliValue = getCliRuntimeVersionArgument();
-  if (cliValue) {
-    return normalizeRuntimeVersion(cliValue);
-  }
-
-  if (hasExplicitEnvironmentRuntimeVersion()) {
-    return normalizeRuntimeVersion(BOOT_ENV_RUNTIME_VERSION_RAW);
-  }
-
-  const settings = loadDesktopSettings();
-  return normalizeRuntimeVersion(settings.runtimeVersion);
+  return RUNTIME_VERSION_V2;
 }
 
 function getEmbeddedNetworkModeState() {
+  const backendSelection = getRemoteBackendSelection();
   return {
     mode: resolveEmbeddedNetworkMode(),
-    remoteBackendConfigured: Boolean(resolveConfiguredBackendUrl()),
+    remoteBackendConfigured: Boolean(backendSelection.explicit),
     environmentLocked: hasExplicitEnvironmentNetworkMode(),
   };
 }
 
 function getRuntimeInfoState() {
+  const backendSelection = getRemoteBackendSelection();
   return {
     runtimeVersion: resolveEmbeddedRuntimeVersion(),
     networkMode: resolveEmbeddedNetworkMode(),
-    remoteBackendConfigured: Boolean(resolveConfiguredBackendUrl()),
+    remoteBackendConfigured: Boolean(backendSelection.explicit),
     environmentLocked: hasExplicitRuntimeVersionOverride(),
   };
 }
 
-function buildMainPageUrl(baseUrl, runtimeVersion = RUNTIME_VERSION_V1) {
+function buildMainPageUrl(baseUrl) {
   const normalizedBaseUrl = normalizeConfiguredBackendUrl(baseUrl);
-  const pagePath = runtimeVersion === RUNTIME_VERSION_V2 ? "./v2" : "./index.html";
-  return new URL(pagePath, `${normalizedBaseUrl}/`).toString();
+  return new URL("./v2", `${normalizedBaseUrl}/`).toString();
 }
 
-async function ensureBackendLoaded(runtimeVersion = RUNTIME_VERSION_V1) {
-  if (startServer && stopServer && loadedRuntimeVersion === runtimeVersion) {
+async function ensureBackendLoaded() {
+  if (startServer && stopServer && loadedRuntimeVersion === RUNTIME_VERSION_V2) {
     return;
   }
 
@@ -366,9 +368,9 @@ async function ensureBackendLoaded(runtimeVersion = RUNTIME_VERSION_V1) {
   process.env.CHAT_UPLOADS_ROOT = path.join(runtimeRoot, "chat-uploads");
   process.env.CHAT_STATE_ROOT = path.join(runtimeRoot, "data");
   process.env[NETWORK_MODE_ENV_KEY] = resolveEmbeddedNetworkMode();
-  process.env[RUNTIME_VERSION_ENV_KEY] = runtimeVersion;
+  process.env[RUNTIME_VERSION_ENV_KEY] = RUNTIME_VERSION_V2;
   console.log(`[main] embedded network mode: ${process.env[NETWORK_MODE_ENV_KEY]}`);
-  console.log(`[main] runtime version: ${runtimeVersion}`);
+  console.log(`[main] runtime version: ${RUNTIME_VERSION_V2} (locked)`);
 
   const bootstrapNodes = resolveConfiguredP2PBootstrap();
   if (bootstrapNodes.length > 0) {
@@ -376,15 +378,13 @@ async function ensureBackendLoaded(runtimeVersion = RUNTIME_VERSION_V1) {
     console.log(`[main] p2p bootstrap override: ${process.env.P2P_BOOTSTRAP}`);
   }
 
-  const backend = runtimeVersion === RUNTIME_VERSION_V2
-    ? await import(
-      pathToFileURL(path.join(__dirname, "..", "v2", "backend", "server.mjs")).href
-    )
-    : require("../server");
+  const backend = await import(
+    pathToFileURL(path.join(__dirname, "..", "v2", "backend", "server.mjs")).href
+  );
 
   startServer = backend.startServer;
   stopServer = backend.stopServer;
-  loadedRuntimeVersion = runtimeVersion;
+  loadedRuntimeVersion = RUNTIME_VERSION_V2;
 }
 
 function findOpenPort(startPort) {
@@ -785,36 +785,115 @@ async function loadMainPageWithRetries(targetWindow, targetUrl) {
   throw lastError || new Error("Main page load failed");
 }
 
+async function checkRemoteBackendHealth(baseUrl) {
+  const normalizedBaseUrl = normalizeConfiguredBackendUrl(baseUrl);
+  const healthUrl = new URL("./api/v2/health", `${normalizedBaseUrl}/`).toString();
+  const controller = typeof AbortController === "function" ? new AbortController() : null;
+  const timeoutId = setTimeout(() => {
+    try {
+      controller?.abort();
+    } catch {
+      // no-op
+    }
+  }, REMOTE_HEALTHCHECK_TIMEOUT_MS);
+
+  try {
+    if (typeof fetch !== "function") {
+      console.warn("[main] remote health check skipped: fetch unavailable");
+      return true;
+    }
+
+    const response = await fetch(healthUrl, {
+      method: "GET",
+      cache: "no-store",
+      signal: controller?.signal,
+    });
+    if (!response.ok) {
+      return false;
+    }
+
+    let payload = null;
+    try {
+      payload = await response.json();
+    } catch {
+      payload = null;
+    }
+    return String(payload?.runtimeVersion || "").trim().toLowerCase() === RUNTIME_VERSION_V2;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+async function startEmbeddedBackend(reason = "") {
+  await ensureBackendLoaded();
+  const port = await findOpenPort(DEFAULT_PORT);
+  const startedServer = await startServer({
+    host: "127.0.0.1",
+    port,
+  });
+
+  const nextUrl = `http://127.0.0.1:${startedServer.port}`;
+  console.log(
+    `[main] backend source: embedded (${String(reason || "explicit").trim() || "explicit"}) -> ${nextUrl}`
+  );
+  return nextUrl;
+}
+
 async function launchMainFlow() {
   await checkUpdatesFromRepository();
 
   createSplashWindow();
   const splashShownAt = Date.now();
-  const configuredBackendUrl = resolveConfiguredBackendUrl();
+  const backendSelection = getRemoteBackendSelection();
   const runtimeVersion = resolveEmbeddedRuntimeVersion();
-
-  if (configuredBackendUrl) {
-    backendUrl = configuredBackendUrl;
-    console.log(`[main] remote backend mode (${runtimeVersion}): ${backendUrl}`);
-  } else {
-    await ensureBackendLoaded(runtimeVersion);
-
-    const port = await findOpenPort(DEFAULT_PORT);
-    const startedServer = await startServer({
-      host: "127.0.0.1",
-      port,
-    });
-
-    backendUrl = `http://127.0.0.1:${startedServer.port}`;
-  }
+  console.log(`[main] runtime version: ${runtimeVersion} (locked)`);
 
   createMainWindow();
-  const mainPageUrl = buildMainPageUrl(backendUrl, runtimeVersion);
+  let backendSource = "";
+  let canFallbackToEmbedded = false;
+
+  if (backendSelection.explicit) {
+    backendUrl = backendSelection.url;
+    backendSource = "remote-explicit";
+    canFallbackToEmbedded = false;
+    console.log(`[main] backend source: ${backendSource} -> ${backendUrl}`);
+  } else {
+    canFallbackToEmbedded = true;
+    const remoteHealthy = await checkRemoteBackendHealth(backendSelection.url);
+    if (remoteHealthy) {
+      backendUrl = backendSelection.url;
+      backendSource = "remote-default";
+      console.log(`[main] backend source: ${backendSource} -> ${backendUrl}`);
+    } else {
+      backendUrl = await startEmbeddedBackend("remote_healthcheck_failed");
+      backendSource = "embedded";
+    }
+  }
+
+  let mainPageUrl = buildMainPageUrl(backendUrl);
   try {
     await loadMainPageWithRetries(mainWindow, mainPageUrl);
   } catch (error) {
-    const errorPageHtml = buildLoadErrorPage(error, mainPageUrl);
-    await mainWindow.loadURL(`data:text/html;charset=UTF-8,${encodeURIComponent(errorPageHtml)}`);
+    if (canFallbackToEmbedded && backendSource.startsWith("remote")) {
+      try {
+        console.warn(
+          `[main] remote navigation failed, fallback to embedded: ${
+            error && error.message ? error.message : String(error)
+          }`
+        );
+        backendUrl = await startEmbeddedBackend("remote_navigation_failed");
+        mainPageUrl = buildMainPageUrl(backendUrl);
+        await loadMainPageWithRetries(mainWindow, mainPageUrl);
+      } catch (fallbackError) {
+        const errorPageHtml = buildLoadErrorPage(fallbackError, mainPageUrl);
+        await mainWindow.loadURL(`data:text/html;charset=UTF-8,${encodeURIComponent(errorPageHtml)}`);
+      }
+    } else {
+      const errorPageHtml = buildLoadErrorPage(error, mainPageUrl);
+      await mainWindow.loadURL(`data:text/html;charset=UTF-8,${encodeURIComponent(errorPageHtml)}`);
+    }
   }
 
   const splashVisibleMs = Date.now() - splashShownAt;
@@ -930,43 +1009,13 @@ ipcMain.handle("app:set-network-mode", async (_event, nextMode) => {
   };
 });
 ipcMain.handle("v2:app:set-runtime-version", async (_event, nextRuntimeVersion) => {
-  const currentState = getRuntimeInfoState();
-  if (currentState.environmentLocked) {
-    return {
-      ok: false,
-      changed: false,
-      restarting: false,
-      runtimeVersion: currentState.runtimeVersion,
-      reason: "environment-locked",
-    };
-  }
-
-  const normalizedRuntimeVersion = normalizeRuntimeVersion(nextRuntimeVersion);
-  if (normalizedRuntimeVersion === currentState.runtimeVersion) {
-    return {
-      ok: true,
-      changed: false,
-      restarting: false,
-      runtimeVersion: currentState.runtimeVersion,
-    };
-  }
-
-  saveDesktopSettings({
-    ...loadDesktopSettings(),
-    runtimeVersion: normalizedRuntimeVersion,
-  });
-
-  await shutdownBackend();
-  app.relaunch();
-  setTimeout(() => {
-    app.exit(0);
-  }, 50);
-
   return {
-    ok: true,
-    changed: true,
-    restarting: true,
-    runtimeVersion: normalizedRuntimeVersion,
+    ok: false,
+    changed: false,
+    restarting: false,
+    runtimeVersion: RUNTIME_VERSION_V2,
+    reason: "runtime_locked_v2",
+    requestedRuntimeVersion: normalizeRuntimeVersion(nextRuntimeVersion),
   };
 });
 ipcMain.handle("window:minimize", (event) => {
@@ -1050,7 +1099,7 @@ app.whenReady().then(async () => {
       createMainWindow();
       loadMainPageWithRetries(
         mainWindow,
-        buildMainPageUrl(backendUrl, resolveEmbeddedRuntimeVersion())
+        buildMainPageUrl(backendUrl)
       ).catch((error) => {
         console.error(`[main] failed to re-open window: ${error.message}`);
       });
