@@ -460,6 +460,9 @@ function normalizeRelayUploadSessionEntry(entry = {}) {
   const fileFingerprint = String(entry.fileFingerprint || "").trim().slice(0, 512);
   const sessionId = String(entry.sessionId || "").trim().slice(0, 96);
   const uploadId = String(entry.uploadId || "").trim().slice(0, 256);
+  const provider = String(entry.provider || "").trim().toLowerCase() === "memory-v2"
+    ? "memory-v2"
+    : "s3-v2";
   const objectKey = String(entry.objectKey || "").trim().slice(0, 512);
   const fileKey = String(entry.fileKey || "").trim().slice(0, 256);
   const noncePrefix = String(entry.noncePrefix || "").trim().slice(0, 64);
@@ -473,7 +476,6 @@ function normalizeRelayUploadSessionEntry(entry = {}) {
     !roomId
     || !fileFingerprint
     || !sessionId
-    || !uploadId
     || !objectKey
     || !fileKey
     || !noncePrefix
@@ -492,12 +494,26 @@ function normalizeRelayUploadSessionEntry(entry = {}) {
     return null;
   }
 
+  const partEtags = {};
+  const rawPartEtags = entry?.partEtags && typeof entry.partEtags === "object"
+    ? entry.partEtags
+    : {};
+  for (const [partNumberRaw, etagRaw] of Object.entries(rawPartEtags)) {
+    const partNumber = Math.round(Number(partNumberRaw));
+    const etag = String(etagRaw || "").trim().replace(/^"+|"+$/g, "").slice(0, 200);
+    if (!Number.isFinite(partNumber) || partNumber < 1 || partNumber > 10000 || !etag) {
+      continue;
+    }
+    partEtags[String(partNumber)] = etag;
+  }
+
   return {
     pk: relayUploadSessionPk(roomId, fileFingerprint),
     roomId,
     fileFingerprint,
     sessionId,
     uploadId,
+    provider,
     objectKey,
     fileKey,
     noncePrefix,
@@ -508,6 +524,7 @@ function normalizeRelayUploadSessionEntry(entry = {}) {
     totalChunks: Math.round(totalChunks),
     mimeType: normalizeChatAttachmentMimeType(entry.mimeType),
     name: String(entry.name || "file").trim().slice(0, 120) || "file",
+    partEtags,
     updatedAt: Number.isFinite(updatedAt) && updatedAt > 0 ? Math.round(updatedAt) : Date.now(),
   };
 }
@@ -1038,7 +1055,7 @@ async function relayApiRequest(path, { method = "POST", body = null, roomId = ""
     headers,
     body: requestBody,
   });
-  if (response.status === 401 && retry) {
+  if ((response.status === 401 || response.status === 403) && retry) {
     const refreshed = await ensureRelayCapabilityToken(cleanRoomId, { forceRefresh: true });
     response = await fetch(path, {
       method,
@@ -1064,8 +1081,17 @@ async function relayApiRequest(path, { method = "POST", body = null, roomId = ""
     payload = null;
   }
   if (!response.ok || payload?.ok === false) {
-    const errorMessage = String(payload?.error || payload?.message || `http_${response.status}`);
+    const errorCode = String(
+      payload?.errorCode
+      || payload?.error
+      || payload?.message
+      || `http_${response.status}`
+    ).trim();
+    const errorDetails = String(payload?.details || "").trim();
+    const errorMessage = errorDetails ? `${errorCode}:${errorDetails}` : errorCode;
     const error = new Error(errorMessage);
+    error.code = errorCode;
+    error.details = errorDetails;
     error.status = response.status;
     error.payload = payload;
     throw error;

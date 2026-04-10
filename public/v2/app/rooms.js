@@ -1297,12 +1297,40 @@ async function relayV2InitUpload(roomId, sessionDraft) {
       roomId: cleanRoomId,
       messageId: sessionDraft.messageId,
       attachmentId: sessionDraft.attachmentId,
-      size: sessionDraft.size,
+      totalBytes: sessionDraft.size,
+      fileName: sessionDraft.name,
       mimeType: sessionDraft.mimeType,
       chunkSize: sessionDraft.chunkSize,
       fileFingerprint: sessionDraft.fileFingerprint,
     },
   });
+}
+
+function normalizeRelayUploadedPartNumber(entry) {
+  const directValue = Number(entry);
+  if (Number.isFinite(directValue) && directValue > 0) {
+    return Math.round(directValue);
+  }
+  const nestedValue = Number(entry?.partNumber);
+  if (Number.isFinite(nestedValue) && nestedValue > 0) {
+    return Math.round(nestedValue);
+  }
+  return 0;
+}
+
+function normalizeRelayUploadedPartEtag(entry) {
+  return String(entry?.eTag || entry?.etag || "")
+    .trim()
+    .replace(/^"+|"+$/g, "")
+    .slice(0, 200);
+}
+
+function resolveRelayPartUploadUrl(payload) {
+  return String(payload?.uploadUrl || payload?.url || "").trim();
+}
+
+function resolveRelayAttachmentDownloadUrl(payload) {
+  return String(payload?.downloadUrl || payload?.url || payload?.directDownloadUrl || "").trim();
 }
 
 async function relayV2GetPartUploadUrl(roomId, sessionId, partNumber) {
@@ -1349,7 +1377,9 @@ async function relayV2GetUploadStatus(roomId, sessionId) {
 
   const payload = await response.json();
   if (!response.ok || payload?.ok === false) {
-    throw new Error(String(payload?.error || `status_${response.status}`));
+    throw new Error(
+      String(payload?.errorCode || payload?.error || payload?.message || `status_${response.status}`)
+    );
   }
   return payload;
 }
@@ -1450,18 +1480,50 @@ async function uploadRelayV2Attachment(roomId, attachment, messageId, { allowMes
       ...draft,
       sessionId: String(init.sessionId || ""),
       uploadId: String(init.uploadId || ""),
+      provider: String(init.provider || "").trim().toLowerCase() === "memory-v2"
+        ? "memory-v2"
+        : "s3-v2",
       objectKey: String(init.objectKey || ""),
+      partEtags: {},
       updatedAt: Date.now(),
     };
     await storeRelayUploadSessionEntry(uploadSession);
   }
 
+  uploadSession.partEtags = uploadSession?.partEtags && typeof uploadSession.partEtags === "object"
+    ? Object.fromEntries(
+      Object.entries(uploadSession.partEtags)
+        .map(([partNumberRaw, etagRaw]) => {
+          const partNumber = Math.round(Number(partNumberRaw));
+          const etag = String(etagRaw || "").trim().replace(/^"+|"+$/g, "").slice(0, 200);
+          return [partNumber, etag];
+        })
+        .filter(([partNumber, etag]) => Number.isFinite(partNumber) && partNumber > 0 && etag)
+        .map(([partNumber, etag]) => [String(partNumber), etag])
+    )
+    : {};
+
   let statusPayload = await relayV2GetUploadStatus(cleanRoomId, uploadSession.sessionId);
-  const uploadedPartSet = new Set(
-    Array.isArray(statusPayload?.uploadedParts)
-      ? statusPayload.uploadedParts.map((item) => Number(item?.partNumber)).filter((item) => Number.isFinite(item))
-      : []
-  );
+  const uploadedPartSet = new Set();
+  if (Array.isArray(statusPayload?.uploadedParts)) {
+    for (const entry of statusPayload.uploadedParts) {
+      const partNumber = normalizeRelayUploadedPartNumber(entry);
+      if (partNumber <= 0) {
+        continue;
+      }
+      uploadedPartSet.add(partNumber);
+      const partEtag = normalizeRelayUploadedPartEtag(entry);
+      if (partEtag) {
+        uploadSession.partEtags[String(partNumber)] = partEtag;
+      }
+    }
+  }
+  for (const partNumberRaw of Object.keys(uploadSession.partEtags)) {
+    const partNumber = Math.round(Number(partNumberRaw));
+    if (Number.isFinite(partNumber) && partNumber > 0) {
+      uploadedPartSet.add(partNumber);
+    }
+  }
 
   for (let partNumber = 1; partNumber <= uploadSession.totalChunks; partNumber += 1) {
     if (uploadedPartSet.has(partNumber)) {
@@ -1483,14 +1545,18 @@ async function uploadRelayV2Attachment(roomId, attachment, messageId, { allowMes
     for (let attempt = 1; attempt <= maxPartUploadAttempts; attempt += 1) {
       try {
         const partUrlPayload = await relayV2GetPartUploadUrl(cleanRoomId, uploadSession.sessionId, partNumber);
+        const partUploadUrl = resolveRelayPartUploadUrl(partUrlPayload);
+        if (!partUploadUrl) {
+          throw new Error("relay_upload_part_url_missing");
+        }
         const uploadHeaders = {
           "Content-Type": "application/octet-stream",
         };
-        let uploadUrl = partUrlPayload.url;
-        if (String(partUrlPayload?.url || "").startsWith("/api/")) {
+        let uploadUrl = partUploadUrl;
+        if (partUploadUrl.startsWith("/api/")) {
           const partToken = await ensureRelayCapabilityToken(cleanRoomId);
           uploadHeaders.Authorization = `Bearer ${partToken}`;
-          uploadUrl = `${partUrlPayload.url}${partUrlPayload.url.includes("?") ? "&" : "?"}capability=${encodeURIComponent(partToken)}`;
+          uploadUrl = `${partUploadUrl}${partUploadUrl.includes("?") ? "&" : "?"}capability=${encodeURIComponent(partToken)}`;
         }
         const uploadResponse = await fetch(uploadUrl, {
           method: "PUT",
@@ -1500,6 +1566,20 @@ async function uploadRelayV2Attachment(roomId, attachment, messageId, { allowMes
         if (!uploadResponse.ok) {
           throw new Error(`relay_upload_part_failed_${uploadResponse.status}`);
         }
+        let uploadResponsePayload = null;
+        try {
+          uploadResponsePayload = await uploadResponse.clone().json();
+        } catch {
+          uploadResponsePayload = null;
+        }
+        const etagHeader = String(uploadResponse.headers.get("etag") || uploadResponse.headers.get("ETag") || "")
+          .trim()
+          .replace(/^"+|"+$/g, "");
+        const partEtag = String(etagHeader || normalizeRelayUploadedPartEtag(uploadResponsePayload || {})).trim();
+        if (partEtag) {
+          uploadSession.partEtags[String(partNumber)] = partEtag;
+        }
+        uploadedPartSet.add(partNumber);
         uploaded = true;
         uploadError = null;
         break;
@@ -1533,20 +1613,48 @@ async function uploadRelayV2Attachment(roomId, attachment, messageId, { allowMes
   }
 
   statusPayload = await relayV2GetUploadStatus(cleanRoomId, uploadSession.sessionId);
-  const completeParts = Array.isArray(statusPayload?.uploadedParts)
-    ? statusPayload.uploadedParts
-        .map((item) => ({
-          partNumber: Number(item?.partNumber),
-          etag: String(item?.etag || "").trim(),
-        }))
-        .filter((item) => Number.isFinite(item.partNumber) && item.partNumber > 0 && item.etag)
-        .sort((left, right) => left.partNumber - right.partNumber)
-    : [];
-  if (completeParts.length < uploadSession.totalChunks) {
+  if (Array.isArray(statusPayload?.uploadedParts)) {
+    for (const entry of statusPayload.uploadedParts) {
+      const partNumber = normalizeRelayUploadedPartNumber(entry);
+      if (partNumber <= 0) {
+        continue;
+      }
+      uploadedPartSet.add(partNumber);
+      const partEtag = normalizeRelayUploadedPartEtag(entry);
+      if (partEtag) {
+        uploadSession.partEtags[String(partNumber)] = partEtag;
+      }
+    }
+  }
+  if (uploadedPartSet.size < uploadSession.totalChunks) {
     throw new Error("relay_upload_incomplete");
   }
 
-  await relayV2CompleteUpload(cleanRoomId, uploadSession.sessionId, completeParts);
+  const completionProvider = String(statusPayload?.provider || uploadSession.provider || relayUploadProvider || "")
+    .trim()
+    .toLowerCase();
+  const completeParts = [];
+  for (let partNumber = 1; partNumber <= uploadSession.totalChunks; partNumber += 1) {
+    const partEtag = String(uploadSession.partEtags?.[String(partNumber)] || "")
+      .trim()
+      .replace(/^"+|"+$/g, "");
+    if (!partEtag) {
+      continue;
+    }
+    completeParts.push({
+      partNumber,
+      eTag: partEtag,
+    });
+  }
+  if (completionProvider !== "memory-v2" && completeParts.length < uploadSession.totalChunks) {
+    throw new Error("relay_upload_missing_etags");
+  }
+
+  await relayV2CompleteUpload(
+    cleanRoomId,
+    uploadSession.sessionId,
+    completionProvider === "memory-v2" ? [] : completeParts
+  );
   await deleteRelayUploadSessionEntry(cleanRoomId, fileFingerprint);
 
   return {
@@ -1773,7 +1881,11 @@ async function downloadRelayV2Attachment(attachment, roomId) {
   for (const candidateRoomId of candidateRoomIds) {
     try {
       const payload = await relayV2GetDownloadUrl(candidateRoomId, objectKey);
-      const response = await fetch(payload.url, {
+      const downloadUrl = resolveRelayAttachmentDownloadUrl(payload);
+      if (!downloadUrl) {
+        throw new Error("relay_v2_download_url_missing");
+      }
+      const response = await fetch(downloadUrl, {
         method: "GET",
       });
       if (!response.ok) {
@@ -1877,7 +1989,11 @@ async function hydrateRelayV2AttachmentInlinePreview(attachment, messageId = "",
     for (const candidateRoomId of candidateRoomIds) {
       try {
         const payload = await relayV2GetDownloadUrl(candidateRoomId, objectKey);
-        const response = await fetch(payload.url, {
+        const downloadUrl = resolveRelayAttachmentDownloadUrl(payload);
+        if (!downloadUrl) {
+          throw new Error("relay_v2_inline_preview_url_missing");
+        }
+        const response = await fetch(downloadUrl, {
           method: "GET",
         });
         if (!response.ok) {
